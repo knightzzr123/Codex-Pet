@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' file: data:; style-src 'self'; script-src 'self'; connect-src 'none'">
+  <title>大肥鱼 · Codex 额度小助手</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="dialogue-data.js" defer></script>
+  <script src="renderer.js" defer></script>
+</head>
+<body class="no-bubble">
+  <main id="mascot" aria-label="Codex 窗口内额度角色">
+    <div id="speech-anchor">
+      <section id="bubble" class="interactive" tabindex="0" aria-label="鲸鱼娘对话和 Codex 额度，按回车说下一句，Esc 收起">
+        <div id="dialogue-view" class="bubble-panel dialogue-view" inert aria-hidden="true">
+          <button id="dialogue-next" aria-label="听鲸鱼娘说下一句">
+            <span class="speaker">鲸鱼娘</span>
+            <span id="dialogue" role="status" aria-live="polite">主人，戳戳我嘛～</span>
+          </button>
+        </div>
+        <div id="quota-view" class="bubble-panel quota-view is-active" aria-hidden="false">
+          <div class="heading"><span class="status-dot" id="status-dot"></span>Codex 剩余额度</div>
+          <div class="hero-line" role="status" aria-live="polite" aria-atomic="true"><span id="remaining">—</span><span id="percent">%</span></div>
+          <div id="period">正在读取账户额度</div>
+          <div id="other-windows"></div>
+          <div id="reset" class="reset">连接本机 Codex…</div>
+          <div class="meta"><span id="updated">首次读取</span><button id="refresh" title="刷新额度" aria-label="刷新 Codex 额度">↻</button></div>
+        </div>
+      </section>
+      <div class="thought-dot dot-one" aria-hidden="true"></div>
+      <div class="thought-dot dot-two" aria-hidden="true"></div>
+    </div>
+    <span id="reaction" aria-hidden="true">♡</span>
+    <button id="pet" class="interactive" aria-label="点击查看额度，点击气泡说话，按住拖动，右键或触摸长按打开菜单" title="点击看额度 · 点气泡和我说话 · 按住拖动 · 右键或触摸长按打开菜单">
+      <img id="pet-image" src="../assets/pet.png" alt="蓝发 Q 版女仆角色" draggable="false">
+    </button>
+  </main>
+</body>
+</html>

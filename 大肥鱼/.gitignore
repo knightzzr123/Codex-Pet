@@ -1,0 +1,31 @@
+# Local runtime and release packages
+/runtime/
+/runtime.7z
+/.runtime-prepare-*/
+/node_modules/
+/dist/
+*.zip
+*.7z
+
+# User state, tests, diagnostics and local maintenance notes
+/data/
+/work/
+/unused/
+/AGENTS.md
+*.log
+*.tmp
+*.bak
+__pycache__/
+*.py[cod]
+
+# Local credentials and editor settings
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+.codex/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,46 @@
+:root { color-scheme: light; font-family: "Microsoft YaHei UI", "Microsoft YaHei", sans-serif; color: #30447e; background: #f5f7fc; }
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+button, textarea { font: inherit; }
+button { padding: 8px 13px; color: inherit; border: 1px solid #dbe2f0; border-radius: 12px; background: #fff; cursor: pointer; min-height: 36px; touch-action: manipulation; }
+button:hover:not(:disabled) { background: #edf2ff; }
+button:focus-visible, textarea:focus-visible { outline: 3px solid #91b9ed; outline-offset: 2px; }
+button:disabled { opacity: .45; cursor: default; }
+main { height: 100%; padding: 22px 24px 18px; display: flex; flex-direction: column; gap: 12px; }
+header h1 { margin: 0 0 6px; font-size: 23px; }
+header p, #category-hint { margin: 0; color: #7583a5; font-size: 13px; line-height: 20px; }
+.tabs { display: flex; gap: 8px; }
+.tabs button { border: 0; background: transparent; }
+.tabs button[aria-selected="true"] { background: #dfe7ff; font-weight: 700; }
+.tabs span { display: inline-block; padding: 0 6px; font-size: 12px; opacity: .7; }
+#workspace { min-height: 0; flex: 1; display: grid; grid-template-columns: minmax(170px, .9fr) minmax(335px, 1.3fr); gap: 18px; }
+aside { min-height: 0; display: flex; flex-direction: column; padding: 14px; border: 1px solid #e1e6f1; border-radius: 18px; background: #fff; }
+.list-heading, .text-heading, .text-meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.list-heading { margin-bottom: 12px; font-size: 13px; }
+.list-heading button { padding: 5px 10px; }
+#line-list { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin; display: flex; flex-direction: column; gap: 6px; }
+.line-item { flex-shrink: 0; display: flex; align-items: center; gap: 9px; text-align: left; width: 100%; border-color: transparent; padding: 9px 10px; }
+.line-item[aria-pressed="true"] { background: #edf1ff; border-color: #b9c8f1; }
+.line-number { color: #8c9abc; font-size: 12px; min-width: 20px; }
+.line-excerpt { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 13px; }
+.empty-list { padding: 24px 8px; font-size: 13px; color: #8a97b5; line-height: 24px; }
+.editing { min-height: 0; display: flex; flex-direction: column; gap: 9px; }
+.text-heading { font-size: 14px; }
+.delete { color: #b45c68; border-color: #ecdbe0; font-size: 12px; }
+textarea { width: 100%; min-height: 72px; height: 95px; flex-shrink: 0; resize: none; border: 1px solid #d8dfef; border-radius: 13px; padding: 12px; color: #30447e; background: #fff; font-size: 15px; line-height: 24px; }
+.text-meta { font-size: 11px; color: #8895b3; }
+.text-meta .over-limit { color: #b45c68; }
+.preview-area { flex: 1; min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; overflow: hidden; }
+.preview-label { font-size: 11px; color: #95a1bd; }
+.preview-bubble { flex-shrink: 0; width: 335px; height: 224px; position: relative; border: 5px solid #273976; border-radius: 50%; background: #fffefc; box-shadow: 0 7px 0 #52629b18; zoom: .7; }
+.preview-content { position: absolute; inset: 35px 42px 40px; display: grid; grid-template-rows: 18px minmax(0, 1fr); gap: 8px; text-align: center; }
+.speaker { font-size: 14px; line-height: 18px; font-weight: 800; color: #8194c8; }
+#preview-text { min-height: 0; display: flex; align-items: center; justify-content: center; white-space: pre-wrap; overflow-wrap: anywhere; color: #30447e; font-size: 18px; line-height: 25px; font-weight: 700; }
+#status { flex-shrink: 0; margin: 0; min-height: 20px; line-height: 20px; font-size: 12px; color: #8694b4; }
+#status.error { color: #b45c68; }
+footer { display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; gap: 8px; }
+footer div { display: flex; gap: 8px; }
+footer .primary { background: #526caf; color: #fff; border-color: #526caf; padding-inline: 20px; }
+footer .primary:hover:not(:disabled) { background: #415d9e; }
+@media (max-height: 610px) { main { padding-block: 14px; gap: 8px; } header p { display: none; } textarea { height: 76px; } .preview-bubble { zoom: .7; } }
+@media (prefers-reduced-motion: no-preference) { button { transition: background 130ms ease, border-color 130ms ease; } }

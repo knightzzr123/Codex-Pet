@@ -1,0 +1,120 @@
+{
+  "electron": "44.7.0",
+  "extractor": "7zr 26.04 (official, unmodified)",
+  "extractorSha256": "256feca8e274e5da655e2a284fabafd9f554365eb164862089dacd4e8276d282",
+  "languages": [
+    "en-US",
+    "zh-CN",
+    "zh-TW"
+  ],
+  "sha256": "4d94f20ccd682d39e042cee9bdfcf5b3e53a5fef968293e8a580d118f9f27cdc",
+  "bytes": 91617114,
+  "expandedBytes": 336633902,
+  "files": [
+    {
+      "path": "LICENSE",
+      "bytes": 1096,
+      "sha256": "5154e165bd6c2cc0cfbcd8916498c7abab0497923bafcd5cb07673fe8480087d"
+    },
+    {
+      "path": "LICENSES.chromium.html",
+      "bytes": 20477229,
+      "sha256": "e6e6b1f9cb0f32235412be113de7716333e88121f9159a0ea0ff3be652021af7"
+    },
+    {
+      "path": "chrome_100_percent.pak",
+      "bytes": 719654,
+      "sha256": "ab7c4b7b6cb8832a31d44b95ec50ce52294f49422a3bdde4e21968eca2930cbe"
+    },
+    {
+      "path": "chrome_200_percent.pak",
+      "bytes": 1269017,
+      "sha256": "30fa4a6e27c9ff2fb0f939f01158477e621a67d86e9ecb84cf11b3947db8eb9d"
+    },
+    {
+      "path": "d3dcompiler_47.dll",
+      "bytes": 4741488,
+      "sha256": "a05f99734f7c4822fefc12b367af21fd0976ed6608752fb1e1e80b6ece7ecbbb"
+    },
+    {
+      "path": "dxcompiler.dll",
+      "bytes": 25744384,
+      "sha256": "22d415f86ce445f4beb57afbb6856b3b83f19918ad270b6ae6047168ec73956d"
+    },
+    {
+      "path": "dxil.dll",
+      "bytes": 1509760,
+      "sha256": "77e039c905030a641e53658a008b74e90635a5ea9b6b79eabd0f2003bdfca59a"
+    },
+    {
+      "path": "electron.exe",
+      "bytes": 246302208,
+      "sha256": "2529b494f4123f152bce346051f7bd855ef95006424a561953cf17c49a3d1ba8"
+    },
+    {
+      "path": "ffmpeg.dll",
+      "bytes": 3113472,
+      "sha256": "d38957b4351486a16141bdd3162643b811564ba6bfa1d12f374c13b70207dc11"
+    },
+    {
+      "path": "icudtl.dat",
+      "bytes": 10875024,
+      "sha256": "da53f0b69843aaa43315f0f210a67e4a874b0be338f3dae08ff57b8afe76ab0d"
+    },
+    {
+      "path": "locales/en-US.pak",
+      "bytes": 586582,
+      "sha256": "23b271e8009bfa14783700cd0712b4ecaa5b8f2ea28a4d81ae1d7e05bc0c96b1"
+    },
+    {
+      "path": "locales/zh-CN.pak",
+      "bytes": 592081,
+      "sha256": "7887bd3d01e12306e32a11d9a20566ca0e93688a0375e6ff59da04cf782b1681"
+    },
+    {
+      "path": "locales/zh-TW.pak",
+      "bytes": 583887,
+      "sha256": "7cb5f76e54a548d4e52aa8cdf226a4339bdadc304897abca690f407e95e42f4d"
+    },
+    {
+      "path": "resources.pak",
+      "bytes": 12436174,
+      "sha256": "335d91338d271cc341cbea39179941cf043965f47aa5d1cd8ef0c98401ddcf9f"
+    },
+    {
+      "path": "resources/default_app.asar",
+      "bytes": 110862,
+      "sha256": "0eb2491b0a9ac94790389d39c09dd5005c6c1f0665842943829bbd0193f6cc4f"
+    },
+    {
+      "path": "snapshot_blob.bin",
+      "bytes": 368768,
+      "sha256": "ec901619d6c0d2589d30e94cb60c313b49dd9c2e4334b6deeb454ac97a67ce21"
+    },
+    {
+      "path": "v8_context_snapshot.bin",
+      "bytes": 742200,
+      "sha256": "883f08309bf436fb442d1903452a69c03747ed77c5f502e88667d9aa1b706556"
+    },
+    {
+      "path": "version",
+      "bytes": 6,
+      "sha256": "3e1e0322d949de3be7e5b9883a0c8014660aafa67e417a7d86b281e9733829a1"
+    },
+    {
+      "path": "vk_swiftshader.dll",
+      "bytes": 5520384,
+      "sha256": "e66cfe13aafbd7d80226e3ce085de5786479de35f7d6a75eded9ecb4ebf9784b"
+    },
+    {
+      "path": "vk_swiftshader_icd.json",
+      "bytes": 106,
+      "sha256": "32d83ff113fef532a9f97e0d2831f8656628ab1c99e9060f0332b1532839afd9"
+    },
+    {
+      "path": "vulkan-1.dll",
+      "bytes": 939520,
+      "sha256": "85d52af200d0020855e91477f6334b59e12167f051991b2a0bb35b9697c0c778"
+    }
+  ]
+}

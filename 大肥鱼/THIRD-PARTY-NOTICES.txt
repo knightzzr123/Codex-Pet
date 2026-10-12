@@ -1,0 +1,4 @@
+Electron binaries are unchanged; runtime.7z includes runtime/LICENSE and runtime/LICENSES.chromium.html.
+Bundled MCP dependency licenses and versions are included in licenses/.
+Official 7zr.exe provenance and licenses are included in tools/7zip/.
+No login credentials, quota cache, user settings or machine-specific paths are included.

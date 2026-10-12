@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'none'">
+  <title>编辑台词 · 大肥鱼</title>
+  <link rel="stylesheet" href="dialogue-editor.css">
+  <script src="dialogue-data.js" defer></script>
+  <script src="dialogue-editor.js" defer></script>
+</head>
+<body>
+  <main>
+    <header><h1>想听我说什么？</h1><p>改写现有台词，或添一句只有你知道的话。</p></header>
+    <div class="tabs" role="tablist" aria-label="台词类型">
+      <button id="speech-tab" role="tab" aria-selected="true" aria-controls="workspace" data-kind="speech">日常台词 <span id="speech-count">24</span></button>
+      <button id="sleepy-tab" role="tab" aria-selected="false" aria-controls="workspace" data-kind="sleepy">收尾台词 <span id="sleepy-count">3</span></button>
+    </div>
+    <p id="category-hint">点击气泡时，按列表顺序说下一句。</p>
+    <section id="workspace" role="tabpanel" aria-labelledby="speech-tab">
+      <aside>
+        <div class="list-heading"><strong id="list-title">日常台词</strong><button id="add" disabled>＋ 新增</button></div>
+        <div id="line-list" role="group" aria-label="选择要编辑的台词"></div>
+      </aside>
+      <div class="editing">
+        <div class="text-heading"><label id="text-label" for="line-text">第 1 句</label><button id="delete" class="delete" disabled>删除这句</button></div>
+        <textarea id="line-text" aria-describedby="text-hint" placeholder="写一句你想让人物说的话…" disabled></textarea>
+        <div class="text-meta"><span id="text-hint">最多 120 字、4 行</span><output id="length">0 / 120</output></div>
+        <div class="preview-area"><span class="preview-label">气泡预览</span><div class="preview-bubble"><div class="preview-content"><span class="speaker">鲸鱼娘</span><span id="preview-text">主人，戳戳我嘛～</span></div></div></div>
+      </div>
+    </section>
+    <p id="status" role="status" aria-live="polite">保存后立即生效，下次打开仍会保留。</p>
+    <footer><button id="restore" disabled>恢复默认台词</button><div><button id="cancel">取消</button><button id="save" class="primary" disabled>保存并应用</button></div></footer>
+  </main>
+</body>
+</html>

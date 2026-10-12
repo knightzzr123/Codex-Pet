@@ -1,0 +1,32 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "dafeiyu-codex-pet",
+  "version": "3.3.0",
+  "description": "Windows Codex 角色插件：边缘吸附、自定义图片皮肤、十档大小、中文对话和账户剩余额度。",
+  "author": {
+    "name": "大肥鱼"
+  },
+  "keywords": [
+    "codex",
+    "desktop-pet",
+    "quota",
+    "windows"
+  ],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "大肥鱼",
+        "shortDescription": "自定义皮肤、可调节大小与 Codex 额度",
+        "longDescription": "Windows 10/11 本地角色，随 Codex 插件服务启动。拖动靠近窗口四边或角落自动吸附，保存位置并跟随窗口缩放。右键导入图片或切换皮肤、选择十档大小，点击人物查看账户额度，点击气泡进入中文对话。自带运行时，无需安装 Node.js。",
+        "developerName": "大肥鱼",
+        "category": "Productivity",
+        "composerIcon": "./assets/icon.png",
+        "logo": "./assets/icon.png",
+        "brandColor": "#526caf",
+        "capabilities": [
+          "Read"
+        ]
+      }
+    }
+  }
+}

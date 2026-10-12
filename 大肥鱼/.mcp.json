@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "codex-pet": {
+      "command": "cmd.exe",
+      "args": ["/d", "/s", "/c", ".\\start-mcp.cmd"],
+      "cwd": "./",
+      "env": { "ELECTRON_RUN_AS_NODE": "1", "DAFEIYU_DESKTOP_ONLY": "1" }
+    }
+  }
+}

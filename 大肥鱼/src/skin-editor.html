@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self'; connect-src 'none'">
+  <title>调整角色图片 · 大肥鱼</title>
+  <link rel="stylesheet" href="skin-editor.css">
+  <script defer src="crop-geometry.js"></script>
+  <script defer src="skin-editor.js"></script>
+</head>
+<body>
+  <main>
+    <header><h1>调整角色图片</h1><p id="filename">正在载入图片…</p></header>
+    <div class="toolbar"><label for="aspect">裁剪比例</label><select id="aspect">
+      <option value="pet">角色比例</option><option value="1">正方形 · 1:1</option>
+      <option value="0.75">竖向 · 3:4</option><option value="1.3333333333333333">横向 · 4:3</option>
+      <option value="original">原图比例</option>
+    </select><button id="reset" type="button">重置</button></div>
+    <div id="stage"><canvas id="preview" tabindex="0" aria-label="裁剪预览，可拖动图片调整位置"></canvas></div>
+    <div class="controls">
+      <div class="zoom-row"><label for="zoom">缩放</label><button id="zoom-out" type="button" aria-label="缩小">−</button>
+        <input id="zoom" type="range" min="25" max="400" step="1" value="100">
+        <button id="zoom-in" type="button" aria-label="放大">＋</button><output id="zoom-value" for="zoom">100%</output>
+      </div>
+      <p class="hint">拖动图片调整位置，滚轮可缩放。棋盘格表示透明区域。</p>
+      <p id="animation-note" hidden>直接导入原图可保留动画；裁剪会保存当前画面。</p>
+      <p id="status" role="status" aria-live="polite"></p>
+    </div>
+    <footer><button id="cancel" type="button">取消</button><div class="save-actions">
+      <button id="original" type="button" disabled>导入原图</button><button id="save" class="primary" type="button" disabled>应用裁剪</button>
+    </div></footer>
+  </main>
+</body>
+</html>

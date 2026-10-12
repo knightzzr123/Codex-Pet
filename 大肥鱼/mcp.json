@@ -1,0 +1,12 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "codex-pet": {
+      "type": "stdio",
+      "command": "cmd.exe",
+      "args": ["/d", "/s", "/c", ".\\start-mcp.cmd"],
+      "cwd": "./",
+      "env": { "ELECTRON_RUN_AS_NODE": "1", "DAFEIYU_DESKTOP_ONLY": "1" }
+    }
+  }
+}

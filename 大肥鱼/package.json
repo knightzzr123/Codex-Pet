@@ -1,0 +1,13 @@
+{
+  "name": "dafeiyu-codex-pet",
+  "version": "3.3.0",
+  "private": true,
+  "description": "Codex 窗口右下角 Q 弹角色与剩余额度",
+  "main": "src/main.cjs",
+  "scripts": {
+    "test": "node --test test/renderer-ux.test.cjs test/crop-geometry.test.cjs test/skins.test.cjs test/startup.test.cjs test/dialogues.test.cjs"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}

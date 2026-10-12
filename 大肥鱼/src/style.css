@@ -1,0 +1,68 @@
+:root { color-scheme: light; font-family: "Microsoft YaHei UI", "Microsoft YaHei", sans-serif; color: #253571; }
+* { box-sizing: border-box; }
+html, body { margin: 0; width: 360px; height: 560px; background: transparent; overflow: hidden; user-select: none; }
+button { font: inherit; border: 0; padding: 0; cursor: pointer; color: inherit; }
+button:focus-visible { outline: 3px solid #82cbed; outline-offset: 3px; }
+#mascot { position: relative; width: 360px; height: 560px; isolation: isolate; }
+#speech-anchor { position: absolute; inset: 0; z-index: 10; pointer-events: none; transform-origin: 50% 296px; transition: transform 90ms ease-out; }
+body.pressing #speech-anchor { transform: translateY(2px) scale(1.035, .87); }
+#bubble { position: absolute; z-index: 3; pointer-events: auto; left: 7px; top: 13px; width: 335px; height: 224px; border: 5px solid #273976; border-radius: 50%; background: #fffefc; box-shadow: 0 7px 0 #52629b18; transform-origin: 58% 100%; transition: opacity 220ms ease, transform 320ms cubic-bezier(.22, 1, .36, 1), visibility 0s; }
+.bubble-panel { position: absolute; text-align: center; opacity: 0; visibility: hidden; pointer-events: none; transform: translateY(5px) scale(.985); transition: opacity 220ms ease, transform 260ms ease, visibility 0s 220ms; }
+.bubble-panel.is-active { opacity: 1; visibility: visible; pointer-events: auto; transform: none; transition-delay: 0s; }
+.dialogue-view { inset: 35px 42px 40px; }
+.quota-view { inset: 28px 39px 12px; }
+#dialogue-next { display: grid; grid-template-rows: 18px minmax(0, 1fr); gap: 8px; width: 100%; height: 100%; background: transparent; text-align: center; border-radius: 50%; touch-action: manipulation; }
+.speaker { font-size: 14px; line-height: 18px; font-weight: 800; color: #8194c8; }
+#dialogue { min-height: 0; display: flex; align-items: center; justify-content: center; font-size: 18px; line-height: 25px; font-weight: 700; color: #30447e; overflow-wrap: anywhere; white-space: pre-wrap; }
+.heading { display: flex; align-items: center; justify-content: center; gap: 7px; font-size: 20px; line-height: 26px; font-weight: 800; color: #566eb0; white-space: nowrap; }
+.status-dot { flex: 0 0 7px; width: 7px; height: 7px; border-radius: 100%; background: #93a1c0; }
+.status-dot.live { background: #47bfa2; box-shadow: 0 0 0 3px #47bfa215; }
+.status-dot.stale { background: #d99854; }
+.hero-line { height: 63px; display: flex; justify-content: center; align-items: baseline; font-weight: 900; letter-spacing: -2px; }
+#remaining { display: inline-block; font-size: 52px; line-height: 1.18; font-variant-numeric: tabular-nums; background: linear-gradient(110deg, #8594ef, #273976 85%); color: transparent; background-clip: text; }
+#percent { font-size: 29px; margin-left: 3px; color: #3d5295; }
+#period { overflow: hidden; text-overflow: ellipsis; font-size: 14px; font-weight: 700; line-height: 21px; color: #798dc6; white-space: nowrap; }
+#other-windows { max-height: 38px; overflow-y: auto; scrollbar-width: thin; }
+.other-row { font-size: 11px; line-height: 17px; color: #586b9e; }
+.reset { margin-top: 5px; font-size: 12px; font-weight: 700; color: #46ad88; white-space: nowrap; }
+.meta { display: flex; justify-content: center; align-items: center; gap: 6px; margin-top: 3px; height: 22px; color: #9babc9; font-size: 10px; min-width: 0; }
+#updated { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#refresh { background: transparent; width: 22px; height: 22px; border-radius: 100%; font-size: 21px; line-height: 22px; color: #7991ca; }
+#refresh:hover { background: #edf2ff; }
+#refresh:disabled { cursor: default; opacity: .45; }
+#refresh.loading { cursor: wait; animation: refreshing 900ms linear infinite; }
+@keyframes refreshing { to { transform: rotate(360deg); } }
+.thought-dot { position: absolute; z-index: 1; border: 5px solid #273976; background: #fffefc; border-radius: 50%; transition: opacity 220ms ease, visibility 0s; }
+.dot-one { width: 34px; height: 26px; left: 151px; top: 243px; transform: rotate(-12deg); }
+.dot-two { width: 21px; height: 17px; left: 190px; top: 279px; transform: rotate(12deg); }
+#pet { position: absolute; z-index: 2; right: 13px; bottom: 8px; width: 258px; height: 250px; background: transparent; -webkit-tap-highlight-color: transparent; transition: transform 220ms ease; }
+#pet-image { display: block; width: 100%; height: 100%; object-fit: contain; transform-origin: 50% 94%; pointer-events: none; transition: transform 90ms ease-out; }
+body.pressing #pet-image { transform: translateY(3px) scale(1.12, .87); }
+body.face-left #pet { right: auto; left: 13px; transform: scaleX(-1); }
+body.face-left #bubble { left: 18px; }
+body.face-left .dot-one { left: 175px; transform: rotate(12deg); }
+body.face-left .dot-two { left: 149px; transform: rotate(-12deg); }
+body.face-left #reaction { right: auto; left: 77px; }
+#pet:hover #pet-image { filter: drop-shadow(0 0 5px #8ea9e94d); }
+#reaction { position: absolute; z-index: 6; bottom: 192px; right: 77px; font-size: 30px; font-weight: 800; color: #ee95bd; opacity: 0; pointer-events: none; }
+body.no-bubble #bubble { opacity: 0; visibility: hidden; pointer-events: none; transform: translateY(8px) scale(.96); transition: opacity 220ms ease, transform 320ms cubic-bezier(.22, 1, .36, 1), visibility 0s 220ms; }
+body.no-bubble .thought-dot { opacity: 0; visibility: hidden; transition-delay: 0s, 220ms; }
+body.dragging #pet { cursor: grabbing; }
+#pet { touch-action: none; cursor: grab; }
+body.error #remaining { font-size: 45px; }
+body.low .reset, body.low #remaining { color: #c98a54; }
+body.multiple .quota-view { inset: 25px 39px 2px; }
+body.multiple .hero-line { height: 52px; }
+body.multiple #remaining { font-size: 44px; }
+body.multiple #other-windows { max-height: 34px; }
+body.reduced-motion #bubble, body.reduced-motion .bubble-panel, body.reduced-motion .thought-dot,
+body.reduced-motion #pet, body.reduced-motion #pet-image, body.reduced-motion #speech-anchor { transition: none; }
+body.reduced-motion.pressing #pet-image { transform: none; }
+body.reduced-motion.pressing #speech-anchor { transform: none; }
+body.reduced-motion #refresh { animation: none; }
+@media (prefers-reduced-motion: reduce) {
+  #bubble, .bubble-panel, .thought-dot, #pet, #pet-image, #speech-anchor { transition: none !important; }
+  body.pressing #pet-image { transform: none; }
+  body.pressing #speech-anchor { transform: none; }
+  #refresh { animation: none; }
+}
