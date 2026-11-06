@@ -28,6 +28,13 @@ const MOTION = Object.freeze({
   reaction: 760
 });
 const reducedMotion = () => Boolean(state.experience?.reducedMotion || motionPreference.matches);
+let reportedReducedMotion = null;
+function reportReducedMotion() {
+  const reduced = reducedMotion();
+  if (reportedReducedMotion === reduced) return;
+  reportedReducedMotion = reduced;
+  window.petAPI.setReducedMotion?.(reduced);
+}
 const bubbleSeconds = () => state.experience?.bubbleSeconds ?? 8;
 const idleIntervalMs = () => Math.max(5000, (state.experience?.idleIntervalSec ?? 45) * 1000);
 const bubbleIsOpen = () => Boolean(state.bubble) || Date.now() < bubbleUntil || pauseStarted !== null;
@@ -223,6 +230,7 @@ function playIdleNudge() {
 }
 
 function render() {
+  reportReducedMotion();
   applyExperienceStyles();
   const skinUrl = state.skin?.url || '../assets/pet.png';
   if (skinUrl !== currentSkinUrl) {

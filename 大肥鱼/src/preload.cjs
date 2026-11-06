@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('petAPI', {
   editDialogues: () => ipcRenderer.send('pet:edit-dialogues'),
   setExperience: (key, value) => ipcRenderer.send('pet:set-experience', key, value),
   setExperiences: partial => ipcRenderer.send('pet:set-experiences', partial),
+  setReducedMotion: reduced => ipcRenderer.send('pet:reduced-motion', reduced === true),
   skinLoadFailed: id => ipcRenderer.send('pet:skin-load-failed', id),
   startDrag: point => ipcRenderer.send('pet:drag-start', point),
   moveDrag: point => ipcRenderer.send('pet:drag-move', point),

@@ -18,6 +18,9 @@ const { DialogueLibrary, defaultDialogues } = require('./dialogues.cjs');
 const { openDialogueEditor, getDialogueEditorWindow } = require('./dialogue-editor.cjs');
 const { BUBBLE_SECONDS, experienceFromPreferences } = require('./experience.cjs');
 const { VIEWPORT, inputRegions } = require('./layout.cjs');
+const {
+  interpolateBounds, interpolateZoom, boundsDiffer, zoomDiffer, settleDurationMs, createSettlePlayer
+} = require('./motion.cjs');
 
 const smokeTest = process.argv.includes('--smoke-test');
 const pluginMode = process.argv.includes('--plugin');
@@ -39,6 +42,10 @@ else {
   let inputBubble = false;
   let inputRegionKey = '';
   let drag = null;
+  let settle = null;
+  let geometrySettled = Promise.resolve();
+  let rendererReducedMotion = false;
+  const settlePlayer = createSettlePlayer();
   let importingSkin = false;
   let deletingSkin = false;
   let editingDialogues = false;
@@ -135,6 +142,7 @@ else {
     }
     preferences[mapped] = next[mapped];
     savePreferences();
+    if (motionReduced()) cancelSettle({ apply: true });
     applyExperienceChrome();
     updateInputRegion();
     publish();
@@ -149,6 +157,7 @@ else {
       }
     }
     if (changed) savePreferences();
+    if (motionReduced()) cancelSettle({ apply: true });
     applyExperienceChrome();
     updateInputRegion();
     publish();
@@ -161,13 +170,40 @@ else {
     publish();
   }
   function setSizeLevel(level) {
-    if (!isSizeLevel(level)) return;
+    if (!isSizeLevel(level)) return Promise.resolve();
     cancelDrag();
+    const changed = preferences.sizeLevel !== level;
     preferences.sizeLevel = level;
     state.sizeLevel = level;
+    if (!changed) {
+      updateScope(scope);
+      publish();
+      return geometrySettled;
+    }
     savePreferences({ immediate: true });
+    if (win && !win.isDestroyed() && scope.rect && shouldShow(scope)) {
+      const area = currentArea();
+      const layout = scopedBounds(area, scaleForLevel(level), preferences.placement);
+      if (layout) {
+        const pending = startSettle({
+          fromBounds: win.getBounds(),
+          toBounds: layout.bounds,
+          fromZoom: win.webContents.getZoomFactor(),
+          toZoom: layout.scale,
+          area
+        });
+        pending.then(() => {
+          if (!closing && !drag) {
+            try { publishScopeStatus(false); } catch {}
+          }
+        });
+        publish();
+        return pending;
+      }
+    }
     updateScope(scope);
     publish();
+    return geometrySettled;
   }
   function skinState(id) {
     const builtIn = builtInSkins.find(skin => skin.id === id);
@@ -312,16 +348,99 @@ else {
     });
     return JSON.parse(output.trim());
   }
+  function motionReduced() {
+    return preferences.reducedMotion === true || rendererReducedMotion === true;
+  }
+  function areaClose(a, b) {
+    if (!a || !b) return false;
+    return Math.abs(a.x - b.x) <= 4 && Math.abs(a.y - b.y) <= 4
+      && Math.abs(a.width - b.width) <= 4 && Math.abs(a.height - b.height) <= 4;
+  }
+  function applyGeometry(bounds, zoom) {
+    if (!win || win.isDestroyed()) return;
+    if (bounds) {
+      const current = win.getBounds();
+      if (bounds.x !== current.x || bounds.y !== current.y || bounds.width !== current.width || bounds.height !== current.height) {
+        win.setBounds({ x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height });
+      }
+    }
+    if (typeof zoom === 'number' && Number.isFinite(zoom) && zoomDiffer(win.webContents.getZoomFactor(), zoom, 0.0005)) {
+      win.webContents.setZoomFactor(zoom);
+    }
+    updateInputRegion();
+  }
+  function cancelSettle({ apply = false } = {}) {
+    const current = settle;
+    if (!current || current.settled) {
+      settle = null;
+      return;
+    }
+    current.settled = true;
+    current.cancel?.();
+    settle = null;
+    if (apply) applyGeometry(current.targetBounds, current.targetZoom);
+    current.resolve();
+  }
+  function startSettle({ fromBounds, toBounds, fromZoom, toZoom, area }) {
+    cancelSettle();
+    const move = boundsDiffer(fromBounds, toBounds);
+    const zooming = zoomDiffer(fromZoom, toZoom);
+    const reduced = motionReduced();
+    const durationMs = settleDurationMs({ boundsDiffer: move, zoomDiffer: zooming, reduced });
+    if (durationMs <= 0) {
+      applyGeometry(toBounds, toZoom);
+      geometrySettled = Promise.resolve();
+      return geometrySettled;
+    }
+    let resolve;
+    const promise = new Promise(done => { resolve = done; });
+    geometrySettled = promise;
+    const handle = settlePlayer.play({
+      durationMs,
+      onFrame(progress) {
+        applyGeometry(
+          interpolateBounds(fromBounds, toBounds, progress),
+          zooming ? interpolateZoom(fromZoom, toZoom, progress) : null
+        );
+      },
+      onDone() {
+        if (!settle || settle.settled) return;
+        settle.settled = true;
+        const done = settle.resolve;
+        const finalBounds = settle.targetBounds;
+        const finalZoom = settle.targetZoom;
+        settle = null;
+        applyGeometry(finalBounds, finalZoom);
+        done();
+      }
+    });
+    settle = {
+      targetBounds: toBounds, targetZoom: toZoom, area, resolve, settled: false, cancel: handle.cancel
+    };
+    return promise;
+  }
   function positionWindow() {
     if (!win || win.isDestroyed() || !scope.rect) return false;
     const area = currentArea();
     const layout = scopedBounds(area, scaleForLevel(preferences.sizeLevel), preferences.placement);
-    if (!layout) { win.hide(); return false; }
-    const bounds = win.getBounds();
-    if (!drag && Object.keys(layout.bounds).some(key => Math.abs(bounds[key] - layout.bounds[key]) > 1)) {
-      win.setBounds(layout.bounds);
+    if (!layout) {
+      cancelSettle();
+      win.hide();
+      return false;
     }
-    if (win.webContents.getZoomFactor() !== layout.scale) win.webContents.setZoomFactor(layout.scale);
+    if (drag) {
+      if (zoomDiffer(win.webContents.getZoomFactor(), layout.scale)) win.webContents.setZoomFactor(layout.scale);
+      updateInputRegion();
+      return true;
+    }
+    if (settle && !settle.settled && areaClose(settle.area, area)
+      && !boundsDiffer(settle.targetBounds, layout.bounds) && !zoomDiffer(settle.targetZoom, layout.scale)) {
+      updateInputRegion();
+      return true;
+    }
+    if (settle) cancelSettle();
+    if (boundsDiffer(win.getBounds(), layout.bounds)) win.setBounds(layout.bounds);
+    if (zoomDiffer(win.webContents.getZoomFactor(), layout.scale)) win.webContents.setZoomFactor(layout.scale);
     updateInputRegion();
     return true;
   }
@@ -348,6 +467,7 @@ else {
       },
       onHide() {
         if (!win || win.isDestroyed()) return;
+        cancelSettle();
         cancelDrag();
         win.hide();
       }
@@ -443,6 +563,7 @@ else {
       ? { x: point.x, y: point.y } : screen.getCursorScreenPoint();
   }
   function dragStart(point) {
+    cancelSettle();
     const bounds = win.getBounds();
     const layout = scope.rect ? scopedBounds(currentArea(), scaleForLevel(preferences.sizeLevel), preferences.placement) : null;
     // Keep the intended size: getBounds() can round up at fractional DPI.
@@ -461,18 +582,30 @@ else {
     win.setBounds(clamped.bounds);
   }
   function dragEnd() {
-    if (drag?.moved && scope.rect) {
-      const snapped = snapBounds(currentArea(), { ...win.getBounds(),
+    let pending = Promise.resolve();
+    if (drag?.moved && scope.rect && win && !win.isDestroyed()) {
+      const area = currentArea();
+      const snapped = snapBounds(area, { ...win.getBounds(),
         width: drag.bounds.width, height: drag.bounds.height });
       if (snapped) {
-        win.setBounds(snapped.bounds);
         preferences.placement = snapped.placement;
         savePreferences({ immediate: true });
+        const fromZoom = win.webContents.getZoomFactor();
+        const fitted = scopedBounds(area, scaleForLevel(preferences.sizeLevel), snapped.placement);
+        const toZoom = fitted?.scale ?? fromZoom;
+        pending = startSettle({
+          fromBounds: win.getBounds(),
+          toBounds: zoomDiffer(fromZoom, toZoom) && fitted ? fitted.bounds : snapped.bounds,
+          fromZoom,
+          toZoom,
+          area
+        });
       }
     }
     drag = null;
     updateInputRegion();
     publish();
+    return pending;
   }
   function cancelDrag() {
     drag = null;
@@ -488,11 +621,11 @@ else {
     const top = area.y + 2, bottom = area.y + area.height - height - 2;
     const centerX = Math.round((left + right) / 2), centerY = Math.round((top + bottom) / 2);
     const checks = [];
-    function moveTo(x, y) {
+    async function moveTo(x, y) {
       const current = win.getBounds();
       dragStart({ x: 0, y: 0 });
       dragMove({ x: x - current.x, y: y - current.y });
-      dragEnd();
+      await dragEnd();
     }
     try {
       for (const [label, x, y, anchorX, anchorY] of [
@@ -503,7 +636,7 @@ else {
         ['bottom-left', left + 12, bottom - 12, 'left', 'bottom'],
         ['bottom-right', right - 12, bottom - 12, 'right', 'bottom']
       ]) {
-        moveTo(x, y);
+        await moveTo(x, y);
         const actual = win.getBounds();
         const saved = JSON.parse(fs.readFileSync(settingsFile, 'utf8')).placement;
         const expected = { x: anchorX === 'left' ? left : anchorX === 'right' ? right : x,
@@ -515,15 +648,15 @@ else {
           // Windows may round the DIP/native-pixel conversion at fractional DPI.
           nativePosition: Math.abs(actual.x - expected.x) <= 1 && Math.abs(actual.y - expected.y) <= 1 });
       }
-      moveTo(left + 12, top + 12);
+      await moveTo(left + 12, top + 12);
       const sizesKeepAnchor = [];
       for (const level of [1, 10]) {
-        setSizeLevel(level);
+        await setSizeLevel(level);
         const actual = win.getBounds();
         sizesKeepAnchor.push(actual.x === area.x + 2 && actual.y === area.y + 2);
       }
-      setSizeLevel(originalLevel);
-      moveTo(centerX, centerY);
+      await setSizeLevel(originalLevel);
+      await moveTo(centerX, centerY);
       const released = preferences.placement.anchorX === null && preferences.placement.anchorY === null;
       // A click still invokes drag start/end, and must not change a free position near an edge.
       preferences.placement = { right: area.x + area.width - width - left - 12,
@@ -536,7 +669,7 @@ else {
         tapDoesNotSnap: beforeTap.x === afterTap.x && beforeTap.y === afterTap.y };
     } finally {
       preferences.placement = originalPlacement;
-      setSizeLevel(originalLevel);
+      await setSizeLevel(originalLevel);
     }
   }
 
@@ -658,7 +791,7 @@ else {
       const initialBounds = win.getBounds();
       dragStart();
       drag.cursor.x += 48; drag.cursor.y += 32;
-      dragMove(); dragEnd();
+      dragMove(); await dragEnd();
       const movedBounds = win.getBounds();
       const area = currentArea();
       dragReport = { moved: movedBounds.x < initialBounds.x || movedBounds.y < initialBounds.y,
@@ -781,7 +914,7 @@ else {
     const originalLevel = preferences.sizeLevel;
     const sizes = [];
     for (let level = 1; level <= SIZE_SCALES.length; level++) {
-      setSizeLevel(level);
+      await setSizeLevel(level);
       await win.webContents.executeJavaScript('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
       const area = scope.rect ? currentArea() : null;
       const bounds = win.getBounds();
@@ -798,7 +931,7 @@ else {
         fs.writeFileSync(path.join(work, `size-${level}-preview.png`), (await win.webContents.capturePage()).toPNG());
       }
     }
-    setSizeLevel(originalLevel);
+    await setSizeLevel(originalLevel);
     const skinChecks = await runSkinSmoke();
     const editorChecks = await require('./skin-editor-smoke.cjs')({ win, work, settingsFile,
       chooseSkinImage, getEditorWindow, getSkin: () => state.skin, setSkin });
@@ -887,6 +1020,10 @@ else {
     ipcMain.on('pet:edit-dialogues', () => { chooseDialogueEditor(); });
     ipcMain.on('pet:set-experience', (_event, key, value) => setExperience(key, value));
     ipcMain.on('pet:set-experiences', (_event, partial) => setExperiences(partial || {}));
+    ipcMain.on('pet:reduced-motion', (_event, value) => {
+      rendererReducedMotion = value === true;
+      if (motionReduced()) cancelSettle({ apply: true });
+    });
     ipcMain.on('pet:skin-load-failed', (_event, id) => {
       if (state.skin.id === id && id !== 'default') setSkin('default');
     });
@@ -949,6 +1086,6 @@ else {
     console.error(error); app.exit(1);
   });
   app.on('second-instance', () => { if (win) updateScope(scope); });
-  app.on('before-quit', () => { closing = true; clearInterval(interval); clearInterval(pluginInterval); scopeMonitor?.stop(); try { scopeVisibility?.flush(); } catch {}; flushPersistentState(); });
+  app.on('before-quit', () => { closing = true; try { cancelSettle({ apply: true }); } catch {} clearInterval(interval); clearInterval(pluginInterval); scopeMonitor?.stop(); try { scopeVisibility?.flush(); } catch {}; flushPersistentState(); });
   app.on('will-quit', flushPersistentState);
 }
