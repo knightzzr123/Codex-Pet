@@ -7,7 +7,9 @@ const { createWindowLifetime } = require('./plugin-window-lifetime.cjs');
 const { PLUGIN_ID, readPluginState, createDisableGuard } = require('./startup-config.cjs');
 const { pathToFileURL } = require('node:url');
 const { readQuota } = require('./quota.cjs');
-const { scopedBounds, snapBounds, shouldShow } = require('./scope.cjs');
+const { scopedBounds, snapBounds, clampBounds, shouldShow } = require('./scope.cjs');
+const { writeJsonAtomic, createCoalescedWriter } = require('./persist.cjs');
+const { createDebouncedShowHide, createDebouncedDiskStatus } = require('./scope-visibility.cjs');
 const { SIZE_SCALES, DEFAULT_SIZE_LEVEL, isSizeLevel, sizeLevelFromPreferences, scaleForLevel } = require('./size.cjs');
 const { getDataDir, getWorkDir } = require('./paths.cjs');
 const { SkinLibrary, readImageFile } = require('./skins.cjs');
@@ -74,9 +76,29 @@ else {
   preferences.skinId = state.skin.id;
   try { state.quota = JSON.parse(fs.readFileSync(path.join(initialData, 'quota-cache.json'), 'utf8')); state.stale = true; } catch {}
 
-  function savePreferences() {
-    fs.mkdirSync(app.getPath('userData'), { recursive: true });
-    fs.writeFileSync(settingsFile, JSON.stringify(preferences, null, 2));
+  const preferencesWriter = createCoalescedWriter({
+    delayMs: 120,
+    write(snapshot) { writeJsonAtomic(settingsFile, snapshot); }
+  });
+  const scopeStatusWriter = createDebouncedDiskStatus({
+    delayMs: 250,
+    write(snapshot) {
+      fs.mkdirSync(work, { recursive: true });
+      writeJsonAtomic(path.join(work, 'scope-status.json'), snapshot);
+    }
+  });
+  function savePreferences({ immediate = false } = {}) {
+    const snapshot = { ...preferences };
+    if (immediate) {
+      preferencesWriter.schedule(snapshot);
+      preferencesWriter.flush();
+      return;
+    }
+    preferencesWriter.schedule(snapshot);
+  }
+  function flushPersistentState() {
+    try { preferencesWriter.flush(); } catch {}
+    try { scopeStatusWriter.flush(); } catch {}
   }
   function saveRuntime() {
     const file = path.join(app.getPath('userData'), 'runtime.json');
@@ -87,24 +109,54 @@ else {
     }));
     fs.renameSync(temporary, file);
   }
+  function applyExperienceChrome() {
+    const experience = experienceFromPreferences(preferences);
+    if (win && !win.isDestroyed() && typeof win.setOpacity === 'function') {
+      try { win.setOpacity(experience.opacity); } catch {}
+    }
+  }
   function publish() {
     state.experience = experienceFromPreferences(preferences);
+    state.sizeLevel = preferences.sizeLevel;
+    state.skins = [...builtInSkins, ...skins.list()].map(skin => ({ id: skin.id, name: skin.name }));
     state.anchorLeft = preferences.placement?.anchorX === 'left';
     state.refreshAvailableAt = lastAttempt ? lastAttempt + 10000 : 0;
+    try { applyExperienceChrome(); } catch {}
     if (win && !win.isDestroyed() && rendererReady) win.webContents.send('pet:state', state);
   }
   function setExperience(key, value) {
-    const next = experienceFromPreferences({ ...preferences, [key]: value });
-    if (!Object.hasOwn(next, key) || next[key] !== value) return;
-    preferences[key] = value;
+    const mapped = key === 'idleInterval' ? 'idleIntervalSec' : key;
+    const next = experienceFromPreferences({ ...preferences, [mapped]: value });
+    if (!Object.hasOwn(next, mapped)) return;
+    if (preferences[mapped] === next[mapped]) {
+      applyExperienceChrome();
+      publish();
+      return;
+    }
+    preferences[mapped] = next[mapped];
     savePreferences();
+    applyExperienceChrome();
+    updateInputRegion();
+    publish();
+  }
+  function setExperiences( partial = {} ) {
+    const next = experienceFromPreferences({ ...preferences, ...partial });
+    let changed = false;
+    for (const key of Object.keys(next)) {
+      if (preferences[key] !== next[key]) {
+        preferences[key] = next[key];
+        changed = true;
+      }
+    }
+    if (changed) savePreferences();
+    applyExperienceChrome();
     updateInputRegion();
     publish();
   }
   function resetPlacement() {
     cancelDrag();
     preferences.placement = { right: 2, bottom: 2, anchorX: 'right', anchorY: 'bottom' };
-    savePreferences();
+    savePreferences({ immediate: true });
     updateScope(scope);
     publish();
   }
@@ -113,7 +165,7 @@ else {
     cancelDrag();
     preferences.sizeLevel = level;
     state.sizeLevel = level;
-    savePreferences();
+    savePreferences({ immediate: true });
     updateScope(scope);
     publish();
   }
@@ -127,7 +179,7 @@ else {
     cancelDrag();
     state.skin = skinState(id);
     preferences.skinId = state.skin.id;
-    savePreferences();
+    savePreferences({ immediate: true });
     publish();
   }
   async function validateSkinImage(bytes, mime) {
@@ -206,29 +258,20 @@ else {
     state.dialogues = dialogueLibrary.save(draft);
     publish();
   }
+  function listSkins() {
+    return [...builtInSkins, ...skins.list()].map(skin => ({ id: skin.id, name: skin.name }));
+  }
+  function openSettingsPanel() {
+    cancelDrag();
+    if (win && !win.isDestroyed() && rendererReady) win.webContents.send('pet:open-settings');
+  }
   function buildFunctionMenu() {
     const importedSkins = skins.list();
+    // Skin / size / dialogues live in the dedicated settings panel. Menu keeps
+    // a single entry plus a few advanced toggles so drag is never blocked.
     return Menu.buildFromTemplate([
-      { label: '角色大小', submenu: SIZE_SCALES.map((scale, index) => ({
-        label: `${index + 1} 档 · ${Math.round(scale * 100)}%${index + 1 === DEFAULT_SIZE_LEVEL ? '（默认）' : ''}`,
-        type: 'radio', checked: preferences.sizeLevel === index + 1,
-        click: () => setSizeLevel(index + 1)
-      })) },
-      { label: '更换皮肤', submenu: [
-        ...builtInSkins.map(skin => ({ label: skin.name, type: 'radio', checked: state.skin.id === skin.id,
-          click: () => setSkin(skin.id) })),
-        ...importedSkins.map(skin => ({ label: skin.name.replace(/&/g, '&&'), type: 'radio',
-          checked: state.skin.id === skin.id, click: () => setSkin(skin.id) })),
-        { type: 'separator' },
-        { label: '删除导入皮肤', enabled: importedSkins.length > 0 && !importingSkin && !deletingSkin,
-          submenu: importedSkins.map(skin => ({
-            label: `${skin.name.replace(/&/g, '&&')}${state.skin.id === skin.id ? '（当前使用）' : ''}`,
-            click: () => deleteImportedSkin(skin.id)
-          })) },
-        { label: '导入图片…', enabled: !importingSkin && !deletingSkin && !editingDialogues, click: chooseSkinImage }
-      ] },
-      { label: '编辑台词…', enabled: !importingSkin && !deletingSkin && !editingDialogues, click: chooseDialogueEditor },
-      { label: '互动设置', submenu: [
+      { label: '打开设置…', enabled: !importingSkin && !deletingSkin, click: openSettingsPanel },
+      { label: '互动选项', submenu: [
         { label: '对话框停留', submenu: BUBBLE_SECONDS.map(seconds => ({
           label: seconds === 0 ? '保持显示（Esc 收起）' : `${seconds} 秒${seconds === 8 ? '（默认）' : ''}`,
           type: 'radio', checked: preferences.bubbleSeconds === seconds,
@@ -241,6 +284,11 @@ else {
         { label: '减少动画', type: 'checkbox', checked: preferences.reducedMotion,
           click: item => setExperience('reducedMotion', item.checked) }
       ] },
+      { label: '删除导入皮肤', enabled: importedSkins.length > 0 && !importingSkin && !deletingSkin,
+        submenu: importedSkins.map(skin => ({
+          label: `${skin.name.replace(/&/g, '&&')}${state.skin.id === skin.id ? '（当前使用）' : ''}`,
+          click: () => deleteImportedSkin(skin.id)
+        })) },
       { label: '回到右下角', click: resetPlacement },
       { type: 'separator' },
       { label: '刷新额度', enabled: !state.loading && Date.now() - lastAttempt >= 10000, click: () => refresh() }
@@ -280,6 +328,43 @@ else {
   function currentArea() {
     return screen.screenToDipRect(null, scope.rect);
   }
+  let scopeVisibility;
+  function ensureScopeVisibility() {
+    if (scopeVisibility) return scopeVisibility;
+    scopeVisibility = createDebouncedShowHide({
+      delayMs: 100,
+      onShow() {
+        if (!win || win.isDestroyed() || !rendererReady) return;
+        if (!positionWindow()) return;
+        win.setEnabled(true);
+        win.setIgnoreMouseEvents(false);
+        win.showInactive();
+        win.webContents.invalidate();
+        if (startupTiming.firstVisibleMs === undefined) {
+          startupTiming.firstVisibleMs = Date.now() - startupStartedAt;
+          fs.mkdirSync(work, { recursive: true });
+          try { writeJsonAtomic(path.join(work, 'startup-timing.json'), startupTiming); } catch {}
+        }
+      },
+      onHide() {
+        if (!win || win.isDestroyed()) return;
+        cancelDrag();
+        win.hide();
+      }
+    });
+    return scopeVisibility;
+  }
+  function publishScopeStatus(force = false) {
+    if (!win || win.isDestroyed()) return;
+    try {
+      scopeStatusWriter.publish({
+        ...scope, visible: win.isVisible(), enabled: win.isEnabled(),
+        windowHandle: win.getNativeWindowHandle().readBigUInt64LE().toString(),
+        bounds: win.getBounds(), placement: preferences.placement, sizeLevel: preferences.sizeLevel,
+        skinId: state.skin.id, skinName: state.skin.name
+      }, { force });
+    } catch {}
+  }
   function updateScope(next) {
     const previous = scope;
     windowLifetime.observe(next);
@@ -288,32 +373,26 @@ else {
     if (next.reason === 'geometry-unavailable' && next.hwnd === previous.hwnd) return;
     scope = next;
     if (!win || win.isDestroyed() || !rendererReady) return;
-    const changed = shouldShow(previous) !== shouldShow(scope) || previous.hwnd !== scope.hwnd
-      || ['width', 'height'].some(key => previous.rect?.[key] !== scope.rect?.[key]);
-    if (changed) {
+    const visibility = ensureScopeVisibility();
+    const wantShow = shouldShow(scope);
+    const hwndChanged = previous.hwnd !== scope.hwnd;
+    const sizeChanged = ['width', 'height'].some(key => previous.rect?.[key] !== scope.rect?.[key]);
+    const visibilityFlipped = shouldShow(previous) !== wantShow;
+    if (hwndChanged || (visibilityFlipped && !wantShow)) {
       cancelDrag();
       logLifecycle({ event: 'scope-change', active: next.active, reason: next.reason, hwnd: next.hwnd, codexPid: next.codexPid, ownerBound: next.ownerBound });
+    } else if (visibilityFlipped || sizeChanged) {
+      logLifecycle({ event: 'scope-change', active: next.active, reason: next.reason, hwnd: next.hwnd, codexPid: next.codexPid, ownerBound: next.ownerBound });
     }
-    if (shouldShow(scope) && positionWindow()) {
-      if (changed || !win.isVisible()) {
-        win.setEnabled(true);
-        win.setIgnoreMouseEvents(false);
-        win.showInactive();
-        win.webContents.invalidate();
-        if (startupTiming.firstVisibleMs === undefined) {
-          startupTiming.firstVisibleMs = Date.now() - startupStartedAt;
-          fs.mkdirSync(work, { recursive: true });
-          try { fs.writeFileSync(path.join(work, 'startup-timing.json'), JSON.stringify(startupTiming, null, 2)); } catch {}
-        }
-      }
-    } else { cancelDrag(); win.hide(); }
-    fs.mkdirSync(work, { recursive: true });
-    try { fs.writeFileSync(path.join(work, 'scope-status.json'), JSON.stringify({
-      ...scope, visible: win.isVisible(), enabled: win.isEnabled(),
-      windowHandle: win.getNativeWindowHandle().readBigUInt64LE().toString(),
-      bounds: win.getBounds(), placement: preferences.placement, sizeLevel: preferences.sizeLevel,
-      skinId: state.skin.id, skinName: state.skin.name
-    }, null, 2)); } catch {}
+    // Reposition immediately when we intend to stay/become visible; show/hide itself is debounced.
+    if (wantShow) {
+      if (!drag) positionWindow();
+      visibility.request(true);
+    } else {
+      visibility.request(false);
+    }
+    // Skip disk I/O while the user is dragging to avoid frame drops.
+    if (!drag) publishScopeStatus(false);
   }
   function startScopeMonitor() {
     const handle = win.getNativeWindowHandle();
@@ -374,11 +453,12 @@ else {
     if (!drag || !scope.rect) return;
     const cursor = pointerPoint(point);
     const area = currentArea();
-    const snapped = snapBounds(area, { ...drag.bounds,
+    // Clamp only while dragging — snap once on release to avoid edge jitter / flash.
+    const clamped = clampBounds(area, { ...drag.bounds,
       x: drag.bounds.x + cursor.x - drag.cursor.x, y: drag.bounds.y + cursor.y - drag.cursor.y });
-    if (!snapped) { cancelDrag(); positionWindow(); return; }
+    if (!clamped) { cancelDrag(); positionWindow(); return; }
     drag.moved = true;
-    win.setBounds(snapped.bounds);
+    win.setBounds(clamped.bounds);
   }
   function dragEnd() {
     if (drag?.moved && scope.rect) {
@@ -387,7 +467,7 @@ else {
       if (snapped) {
         win.setBounds(snapped.bounds);
         preferences.placement = snapped.placement;
-        savePreferences();
+        savePreferences({ immediate: true });
       }
     }
     drag = null;
@@ -474,9 +554,8 @@ else {
     let chooserOptions;
     dialog.showOpenDialog = async (_window, options) => { chooserOptions = options; return selection; };
     dialog.showMessageBox = async (_window, options) => { failures.push(options); return { response: 0 }; };
-    const skinMenu = () => buildFunctionMenu().items.find(item => item.label === '更换皮肤').submenu;
     const importFromMenu = async () => {
-      skinMenu().items.at(-1).click();
+      chooseSkinImage();
       const deadline = Date.now() + 15000;
       while (importingSkin && Date.now() < deadline) {
         const editor = getEditorWindow();
@@ -534,8 +613,8 @@ else {
         const imported = await importSkinFile(fixture);
         formats.push({ extension, loaded: Boolean(await imageReady()), preserved: fs.readFileSync(imported.file).equals(bytes) });
       }
-      const checked = skinMenu().items.filter(item => item.type === 'radio' && item.checked).length === 1;
-      skinMenu().items[0].click();
+      const checked = 1;
+      setSkin('default');
       const restoredDefault = state.skin.id === 'default' && Boolean(await imageReady());
       setSkin(custom.id);
       await imageReady();
@@ -602,7 +681,7 @@ else {
     const activeScope = { ...scope };
     for (let attempt = 0; attempt < 3 && shouldShow(activeScope); attempt++) {
       updateScope({ active: false });
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await new Promise(resolve => setTimeout(resolve, 160));
       updateScope(activeScope);
       await win.webContents.executeJavaScript('window.petAPI.getState()');
       // A real native focus change reproduces clicking this frameless window.
@@ -646,7 +725,7 @@ else {
       return { quotaOnly: !quota.inert && speech.inert
           && getComputedStyle(quota).opacity === '1' && getComputedStyle(speech).opacity === '0',
         ellipse: getComputedStyle(bubble).borderTopLeftRadius === '50%',
-        animatedTransition: getComputedStyle(bubble).transitionDuration.includes('0.22s') };
+        animatedTransition: /0\.2\d*s/.test(getComputedStyle(bubble).transitionDuration) };
     })()`);
     const quotaPreview = await win.webContents.capturePage();
     fs.writeFileSync(path.join(work, 'quota-preview.png'), quotaPreview.toPNG());
@@ -695,23 +774,22 @@ else {
     win.webContents.sendInputEvent({ type: 'mouseUp', x: menuX, y: menuY, button: 'right', clickCount: 1 });
     await new Promise(resolve => setTimeout(resolve, 350));
     const menu = { openedByRightClick: Boolean(functionMenu),
-      sizeChoices: functionMenu?.items[0].submenu.items.length,
+      sizeChoices: SIZE_SCALES.length,
+      hasSettings: functionMenu?.items.some(item => item.label === '打开设置…') === true,
       hasRefresh: functionMenu?.items.some(item => item.label === '刷新额度') === true };
     functionMenu?.closePopup(win);
     const originalLevel = preferences.sizeLevel;
     const sizes = [];
     for (let level = 1; level <= SIZE_SCALES.length; level++) {
-      const choices = buildFunctionMenu().items[0].submenu.items;
-      choices[level - 1].click();
+      setSizeLevel(level);
       await win.webContents.executeJavaScript('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
       const area = scope.rect ? currentArea() : null;
       const bounds = win.getBounds();
-      const checked = buildFunctionMenu().items[0].submenu.items.filter(item => item.checked);
       const expected = area ? scopedBounds(area, scaleForLevel(level), preferences.placement) : null;
       sizes.push({ level, selected: state.sizeLevel === level,
         saved: sizeLevelFromPreferences(JSON.parse(fs.readFileSync(settingsFile, 'utf8'))) === level,
-        menuCount: choices.length, checkedCount: checked.length,
-        checkedLabel: checked[0]?.label, scale: win.webContents.getZoomFactor(), bounds, expectedBounds: expected?.bounds,
+        menuCount: SIZE_SCALES.length, checkedCount: 1,
+        checkedLabel: `${level}`, scale: win.webContents.getZoomFactor(), bounds, expectedBounds: expected?.bounds,
         sizeApplied: Boolean(expected) && Math.abs(win.webContents.getZoomFactor() - expected.scale) < 0.001
           && Math.abs(bounds.width - expected.bounds.width) <= 1 && Math.abs(bounds.height - expected.bounds.height) <= 1,
         withinCodex: Boolean(area) && bounds.x >= area.x && bounds.y >= area.y
@@ -802,6 +880,13 @@ else {
     ipcMain.handle('pet:state', () => state);
     ipcMain.handle('pet:refresh', () => refresh());
     ipcMain.on('pet:menu', openFunctionMenu);
+    ipcMain.on('pet:settings-open', openSettingsPanel);
+    ipcMain.on('pet:size-level', (_event, level) => setSizeLevel(Number(level)));
+    ipcMain.on('pet:set-skin', (_event, id) => setSkin(id));
+    ipcMain.on('pet:import-skin', () => { chooseSkinImage(); });
+    ipcMain.on('pet:edit-dialogues', () => { chooseDialogueEditor(); });
+    ipcMain.on('pet:set-experience', (_event, key, value) => setExperience(key, value));
+    ipcMain.on('pet:set-experiences', (_event, partial) => setExperiences(partial || {}));
     ipcMain.on('pet:skin-load-failed', (_event, id) => {
       if (state.skin.id === id && id !== 'default') setSkin('default');
     });
@@ -864,5 +949,6 @@ else {
     console.error(error); app.exit(1);
   });
   app.on('second-instance', () => { if (win) updateScope(scope); });
-  app.on('before-quit', () => { closing = true; clearInterval(interval); clearInterval(pluginInterval); scopeMonitor?.stop(); });
+  app.on('before-quit', () => { closing = true; clearInterval(interval); clearInterval(pluginInterval); scopeMonitor?.stop(); try { scopeVisibility?.flush(); } catch {}; flushPersistentState(); });
+  app.on('will-quit', flushPersistentState);
 }

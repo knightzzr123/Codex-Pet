@@ -2,10 +2,10 @@
   "name": "dafeiyu-codex-pet",
   "version": "3.3.0",
   "private": true,
-  "description": "Codex 窗口右下角 Q 弹角色与剩余额度",
+  "description": "Codex \u7a97\u53e3\u53f3\u4e0b\u89d2 Q \u5f39\u89d2\u8272\u4e0e\u5269\u4f59\u989d\u5ea6",
   "main": "src/main.cjs",
   "scripts": {
-    "test": "node --test test/renderer-ux.test.cjs test/crop-geometry.test.cjs test/skins.test.cjs test/startup.test.cjs test/dialogues.test.cjs"
+    "test": "node --test test/renderer-ux.test.cjs test/crop-geometry.test.cjs test/skins.test.cjs test/startup.test.cjs test/dialogues.test.cjs test/scope.test.cjs test/size.test.cjs test/experience.test.cjs test/paths.test.cjs test/preferences-roundtrip.test.cjs test/layout.test.cjs test/persist.test.cjs test/scope-visibility.test.cjs"
   },
   "engines": {
     "node": ">=22.12.0"

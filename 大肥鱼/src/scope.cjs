@@ -41,7 +41,22 @@ function snapBounds(rect, bounds, distance = SNAP_DISTANCE) {
     bottom: Math.max(EDGE_MARGIN, rect.y + rect.height - y - bounds.height), anchorX, anchorY
   } };
 }
+
+function clampBounds(rect, bounds) {
+  if (!rect || !bounds) return null;
+  const left = rect.x + EDGE_MARGIN, top = rect.y + EDGE_MARGIN;
+  const right = rect.x + rect.width - bounds.width - EDGE_MARGIN;
+  const bottom = rect.y + rect.height - bounds.height - EDGE_MARGIN;
+  if (right < left || bottom < top) return null;
+  const x = Math.round(Math.max(left, Math.min(right, bounds.x)));
+  const y = Math.round(Math.max(top, Math.min(bottom, bounds.y)));
+  return { bounds: { ...bounds, x, y }, placement: {
+    right: Math.max(EDGE_MARGIN, rect.x + rect.width - x - bounds.width),
+    bottom: Math.max(EDGE_MARGIN, rect.y + rect.height - y - bounds.height),
+    anchorX: null, anchorY: null
+  } };
+}
 function shouldShow(scope) {
   return scope?.active === true && scope?.ownerBound === true && Boolean(scope.rect);
 }
-module.exports = { scopedBounds, snapBounds, SNAP_DISTANCE, shouldShow };
+module.exports = { scopedBounds, snapBounds, clampBounds, SNAP_DISTANCE, shouldShow };
