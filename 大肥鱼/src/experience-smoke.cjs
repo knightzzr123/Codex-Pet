@@ -8,7 +8,7 @@ module.exports = async function runExperienceSmoke({ win, work, settingsFile, ge
   const js = source => win.webContents.executeJavaScript(source);
   const original = structuredClone(getPreferences());
   const checks = {};
-  const submenu = () => getMenu().items.find(item => item.label === '互动设置').submenu;
+  const submenu = () => getMenu().items.find(item => item.label === '互动选项').submenu;
   const duration = seconds => submenu().items[0].submenu.items.find(item => item.label.startsWith(seconds === 0 ? '保持显示' : `${seconds} 秒`)).click();
   const toggle = (label, checked) => {
     const item = submenu().items.find(item => item.label === label);
@@ -22,6 +22,7 @@ module.exports = async function runExperienceSmoke({ win, work, settingsFile, ge
   try {
     duration(15);
     toggle('点人物继续对话', true);
+    await wait(200);
     await js('new Promise(resolve => requestAnimationFrame(resolve))');
     checks.settingsSaved = JSON.parse(fs.readFileSync(settingsFile, 'utf8')).bubbleSeconds === 15
       && JSON.parse(fs.readFileSync(settingsFile, 'utf8')).advanceOnPetTap === true;
@@ -65,8 +66,7 @@ module.exports = async function runExperienceSmoke({ win, work, settingsFile, ge
     checks.mirroredInputRegion = nativeRegions?.[0].x === 0;
     fs.writeFileSync(path.join(work, 'left-quota-preview.png'), (await win.webContents.capturePage()).toPNG());
 
-    const skinMenu = () => getMenu().items.find(item => item.label === '更换皮肤').submenu;
-    skinMenu().items.find(item => item.label === '紫角玫瑰 · 半身').click();
+    setSkin('rose');
     checks.builtInSkin = await js(`new Promise(resolve => {
       let attempts = 0;
       const check = () => {
@@ -77,7 +77,7 @@ module.exports = async function runExperienceSmoke({ win, work, settingsFile, ge
       }; check();
     })`);
     if (checks.builtInSkin) fs.writeFileSync(path.join(work, 'rose-preview.png'), (await win.webContents.capturePage()).toPNG());
-    skinMenu().items[0].click();
+    setSkin('default');
     toggle('减少动画', true);
     await js('new Promise(resolve => requestAnimationFrame(resolve))');
     checks.reducedMotion = await js(`(() => {

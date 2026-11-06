@@ -35,6 +35,44 @@
     <button id="pet" class="interactive" aria-label="点击查看额度，点击气泡说话，按住拖动，右键或触摸长按打开菜单" title="点击看额度 · 点气泡和我说话 · 按住拖动 · 右键或触摸长按打开菜单">
       <img id="pet-image" src="../assets/pet.png" alt="蓝发 Q 版女仆角色" draggable="false">
     </button>
+    <aside id="settings-panel" class="settings-panel" hidden aria-hidden="true" aria-label="桌宠设置">
+      <header class="settings-header">
+        <h2>设置</h2>
+        <button type="button" id="settings-close" class="settings-close" aria-label="关闭设置">×</button>
+      </header>
+      <section class="settings-section" aria-labelledby="settings-skins-title">
+        <h3 id="settings-skins-title">皮肤</h3>
+        <div id="settings-skins" class="settings-row settings-skins"></div>
+        <button type="button" id="settings-import-skin" class="settings-action">导入图片…</button>
+      </section>
+      <section class="settings-section" aria-labelledby="settings-size-title">
+        <h3 id="settings-size-title">大小</h3>
+        <div id="settings-size" class="settings-size" role="radiogroup" aria-label="角色大小"></div>
+      </section>
+      <section class="settings-section" aria-labelledby="settings-dialogue-title">
+        <h3 id="settings-dialogue-title">台词</h3>
+        <button type="button" id="settings-edit-dialogues" class="settings-action">编辑台词…</button>
+      </section>
+      <section class="settings-section" aria-labelledby="settings-custom-title">
+        <h3 id="settings-custom-title">自定义</h3>
+        <label class="settings-field">气泡偏移 X
+          <input id="settings-bubble-x" type="range" min="-48" max="48" step="1" value="0">
+          <span id="settings-bubble-x-value">0</span>
+        </label>
+        <label class="settings-field">气泡偏移 Y
+          <input id="settings-bubble-y" type="range" min="-48" max="48" step="1" value="0">
+          <span id="settings-bubble-y-value">0</span>
+        </label>
+        <label class="settings-field">闲置动作间隔（秒）
+          <input id="settings-idle" type="range" min="5" max="300" step="5" value="45">
+          <span id="settings-idle-value">45</span>
+        </label>
+        <label class="settings-field">透明度
+          <input id="settings-opacity" type="range" min="0.35" max="1" step="0.05" value="1">
+          <span id="settings-opacity-value">100%</span>
+        </label>
+      </section>
+    </aside>
   </main>
 </body>
 </html>

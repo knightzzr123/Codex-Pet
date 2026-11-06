@@ -16,10 +16,27 @@ let longPressTimer = null;
 let previousRemaining = null;
 let otherRowsText = '';
 let pauseStarted = null;
+let settingsOpen = false;
+let idleTimer = null;
+let lastIdleAt = Date.now();
 const reading = new Set();
 const motionPreference = window.matchMedia('(prefers-reduced-motion: reduce)');
+const MOTION = Object.freeze({
+  ease: 'cubic-bezier(.22, 1, .36, 1)',
+  micro: 200,
+  panel: 320,
+  reaction: 760
+});
 const reducedMotion = () => Boolean(state.experience?.reducedMotion || motionPreference.matches);
+let reportedReducedMotion = null;
+function reportReducedMotion() {
+  const reduced = reducedMotion();
+  if (reportedReducedMotion === reduced) return;
+  reportedReducedMotion = reduced;
+  window.petAPI.setReducedMotion?.(reduced);
+}
 const bubbleSeconds = () => state.experience?.bubbleSeconds ?? 8;
+const idleIntervalMs = () => Math.max(5000, (state.experience?.idleIntervalSec ?? 45) * 1000);
 const bubbleIsOpen = () => Boolean(state.bubble) || Date.now() < bubbleUntil || pauseStarted !== null;
 
 function cancelPetMotion() {
@@ -67,7 +84,7 @@ function setSpeech(text) {
   speechAnimation = $('dialogue').animate([
     { opacity: 0, transform: 'translateY(4px)' },
     { opacity: 1, transform: 'translateY(0)' }
-  ], { duration: 240, easing: 'ease-out' });
+  ], { duration: MOTION.micro, easing: MOTION.ease });
 }
 function speak() {
   bubbleMode = 'dialogue';
@@ -93,6 +110,7 @@ function tick() {
     sleepyReplyShown = true;
     bubbleUntil = Date.now() + 3000;
   }
+  maybeIdleAction();
   render();
 }
 
@@ -115,7 +133,105 @@ function countdown(timestamp) {
   if (hours) return `${hours}小时 ${minutes}分钟后重置`;
   return `${minutes}分 ${seconds % 60}秒后重置`;
 }
+
+function applyExperienceStyles() {
+  const experience = state.experience || {};
+  const root = document.documentElement?.style;
+  if (!root || typeof root.setProperty !== 'function') return;
+  root.setProperty('--bubble-offset-x', `${experience.bubbleOffsetX || 0}px`);
+  root.setProperty('--bubble-offset-y', `${experience.bubbleOffsetY || 0}px`);
+  // Opacity is primarily applied via BrowserWindow.setOpacity; CSS keeps the panel readable locally.
+  const opacity = experience.opacity ?? 1;
+  root.setProperty('--pet-opacity', String(Math.max(0.35, Math.min(1, opacity))));
+}
+
+function syncSettingsControls() {
+  const panel = $('settings-panel');
+  if (!panel || typeof document.createElement !== 'function') return;
+  try {
+    const experience = state.experience || {};
+    const sizeLevel = state.sizeLevel || 4;
+    const skins = state.skins || [{ id: state.skin?.id || 'default', name: state.skin?.name || '默认' }];
+    const skinBox = $('settings-skins');
+    if (skinBox && typeof skinBox.replaceChildren === 'function') {
+      skinBox.replaceChildren(...skins.map(skin => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = `settings-chip${state.skin?.id === skin.id ? ' is-active' : ''}`;
+        button.textContent = skin.name;
+        button.addEventListener('click', () => window.petAPI.setSkin?.(skin.id));
+        return button;
+      }));
+    }
+    const sizeBox = $('settings-size');
+    if (sizeBox && !sizeBox.childElementCount && typeof sizeBox.append === 'function') {
+      for (let level = 1; level <= 10; level += 1) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'settings-size-btn';
+        button.setAttribute('data-level', String(level));
+        button.textContent = `${level}`;
+        button.setAttribute('aria-label', `大小 ${level} 档`);
+        button.addEventListener('click', () => window.petAPI.setSizeLevel?.(level));
+        sizeBox.append(button);
+      }
+    }
+    if (sizeBox && typeof sizeBox.querySelectorAll === 'function') {
+      for (const button of sizeBox.querySelectorAll('.settings-size-btn')) {
+        button.classList.toggle('is-active', Number(button.getAttribute('data-level')) === sizeLevel);
+      }
+    }
+    const setRange = (id, valueId, value, format = v => v) => {
+      const input = $(id); const label = $(valueId);
+      if (!input) return;
+      if (document.activeElement !== input) input.value = String(value);
+      if (label) label.textContent = format(value);
+    };
+    setRange('settings-bubble-x', 'settings-bubble-x-value', experience.bubbleOffsetX || 0);
+    setRange('settings-bubble-y', 'settings-bubble-y-value', experience.bubbleOffsetY || 0);
+    setRange('settings-idle', 'settings-idle-value', experience.idleIntervalSec || 45);
+    setRange('settings-opacity', 'settings-opacity-value', experience.opacity ?? 1, v => `${Math.round(Number(v) * 100)}%`);
+  } catch {
+    // Unit fixture DOM is intentionally incomplete.
+  }
+}
+
+function setSettingsOpen(open) {
+  settingsOpen = Boolean(open);
+  const panel = $('settings-panel');
+  if (!panel) return;
+  panel.hidden = !settingsOpen;
+  panel.ariaHidden = String(!settingsOpen);
+  document.body.classList.toggle('settings-open', settingsOpen);
+  // Keep native hit-testing large enough for the panel without blocking pet drag when closed.
+  globalThis.petAPI.setInputRegion(settingsOpen || bubbleIsOpen());
+}
+
+function maybeIdleAction() {
+  if (reducedMotion() || settingsOpen || pointerDrag || bubbleIsOpen()) return;
+  if (Date.now() - lastIdleAt < idleIntervalMs()) return;
+  lastIdleAt = Date.now();
+  playIdleNudge();
+}
+
+function playIdleNudge() {
+  cancelPetMotion();
+  if (reducedMotion()) return;
+  petAnimation = $('pet-image').animate([
+    { transform: 'translateY(0) scale(1, 1)' },
+    { transform: 'translateY(-6px) scale(.98, 1.03)', offset: .45 },
+    { transform: 'translateY(0) scale(1, 1)' }
+  ], { duration: MOTION.panel, easing: MOTION.ease });
+  bubbleFollowAnimation = $('speech-anchor').animate([
+    { transform: 'translateY(0)' },
+    { transform: 'translateY(-3px)', offset: .45 },
+    { transform: 'translateY(0)' }
+  ], { duration: MOTION.panel, easing: MOTION.ease });
+}
+
 function render() {
+  reportReducedMotion();
+  applyExperienceStyles();
   const skinUrl = state.skin?.url || '../assets/pet.png';
   if (skinUrl !== currentSkinUrl) {
     cancelPetMotion();
@@ -139,7 +255,7 @@ function render() {
     $(id).inert = !active;
     $(id).ariaHidden = String(!active);
   }
-  if (bubbleVisible) {
+  if (bubbleVisible || settingsOpen) {
     clearTimeout(inputHideTimer);
     inputHideTimer = null;
     if (inputBubble !== true) {
@@ -167,7 +283,7 @@ function render() {
       numberAnimation = $('remaining').animate([
         { transform: 'translateY(12px)', opacity: .2 },
         { transform: 'translateY(0)', opacity: 1 }
-      ], { duration: 320, easing: 'cubic-bezier(.22, 1, .36, 1)' });
+      ], { duration: MOTION.panel, easing: MOTION.ease });
     }
   }
   previousRemaining = remaining;
@@ -210,9 +326,11 @@ function render() {
   $('refresh').classList.toggle('loading', state.loading);
   $('refresh').ariaBusy = String(state.loading);
   $('refresh').title = state.loading ? '正在刷新额度' : cooldown ? `${cooldown} 秒后可再次刷新` : '刷新额度';
+  syncSettingsControls();
 }
 
 function pat() {
+  lastIdleAt = Date.now();
   if (state.experience?.advanceOnPetTap && bubbleIsOpen()) speak();
   else showQuota();
   playReaction();
@@ -220,6 +338,7 @@ function pat() {
 function playReaction() {
   cancelPetMotion();
   reactionAnimation?.cancel();
+  lastIdleAt = Date.now();
   if (reducedMotion()) return;
   petAnimation = $('pet-image').animate([
     { transform: 'translateY(0) scale(1, 1)', offset: 0 },
@@ -229,7 +348,7 @@ function playReaction() {
     { transform: 'translateY(-7px) scale(.97, 1.04)', offset: .72 },
     { transform: 'translateY(1px) scale(1.025, .98)', offset: .88 },
     { transform: 'translateY(0) scale(1, 1)', offset: 1 }
-  ], { duration: 760, easing: 'ease-in-out' });
+  ], { duration: MOTION.reaction, easing: 'ease-in-out' });
   // A separate anchor preserves the ellipse's own show/hide transition.
   bubbleFollowAnimation = $('speech-anchor').animate([
     { transform: 'translateY(0) scale(1, 1)', offset: 0 },
@@ -239,12 +358,12 @@ function playReaction() {
     { transform: 'translateY(-3px) scale(.99, 1.012)', offset: .72 },
     { transform: 'translateY(.5px) scale(1.005, .98)', offset: .88 },
     { transform: 'translateY(0) scale(1, 1)', offset: 1 }
-  ], { duration: 760, easing: 'ease-in-out' });
+  ], { duration: MOTION.reaction, easing: 'ease-in-out' });
   reactionAnimation = $('reaction').animate([
     { opacity: 0, transform: 'translateY(8px) scale(.5)' },
     { opacity: 1, transform: 'translateY(-4px) scale(1.12)', offset: .3 },
     { opacity: 0, transform: 'translateY(-40px) scale(.9)' }
-  ], { duration: 900, easing: 'ease-out' });
+  ], { duration: 900, easing: MOTION.ease });
 }
 $('pet').addEventListener('click', event => {
   if (suppressClick) { suppressClick = false; return; }
@@ -263,6 +382,7 @@ for (const id of ['pet', 'bubble']) {
 }
 $('pet').addEventListener('pointerdown', event => {
   if (event.button !== 0 || event.isPrimary === false) return;
+  // Settings panel stays open; dragging the pet must still work (panel does not capture pet).
   cancelDrag();
   cancelPetMotion();
   suppressClick = false;
@@ -346,6 +466,7 @@ $('other-windows').addEventListener('scroll', () => { if (bubbleIsOpen()) renewB
 window.addEventListener('keydown', event => {
   if (event.key !== 'Escape') return;
   event.preventDefault();
+  if (settingsOpen) { setSettingsOpen(false); return; }
   closeBubble();
   $('pet').focus({ preventScroll: true });
 });
@@ -355,6 +476,26 @@ motionPreference.addEventListener('change', () => {
   if (reducedMotion()) for (const animation of [petAnimation, bubbleFollowAnimation, reactionAnimation, speechAnimation, numberAnimation]) animation?.cancel();
   render();
 });
+
+$('settings-close')?.addEventListener('click', () => setSettingsOpen(false));
+$('settings-import-skin')?.addEventListener('click', () => window.petAPI.importSkin());
+$('settings-edit-dialogues')?.addEventListener('click', () => window.petAPI.editDialogues());
+for (const [id, key, cast] of [
+  ['settings-bubble-x', 'bubbleOffsetX', Number],
+  ['settings-bubble-y', 'bubbleOffsetY', Number],
+  ['settings-idle', 'idleIntervalSec', Number],
+  ['settings-opacity', 'opacity', Number]
+]) {
+  $(id)?.addEventListener('input', event => {
+    const value = cast(event.target.value);
+    window.petAPI.setExperience(key, value);
+    if (key === 'bubbleOffsetX') $('settings-bubble-x-value').textContent = String(value);
+    if (key === 'bubbleOffsetY') $('settings-bubble-y-value').textContent = String(value);
+    if (key === 'idleIntervalSec') $('settings-idle-value').textContent = String(value);
+    if (key === 'opacity') $('settings-opacity-value').textContent = `${Math.round(value * 100)}%`;
+  });
+}
+window.petAPI.onOpenSettings?.(() => setSettingsOpen(true));
 
 function receiveState(next) {
   const oldSeconds = bubbleSeconds();
@@ -380,4 +521,3 @@ function receiveState(next) {
 window.petAPI.onState(receiveState);
 window.petAPI.getState().then(receiveState);
 setInterval(tick, 1000);
-

@@ -3,6 +3,14 @@ contextBridge.exposeInMainWorld('petAPI', {
   getState: () => ipcRenderer.invoke('pet:state'),
   refresh: () => ipcRenderer.invoke('pet:refresh'),
   openMenu: () => ipcRenderer.send('pet:menu'),
+  openSettings: () => ipcRenderer.send('pet:settings-open'),
+  setSizeLevel: level => ipcRenderer.send('pet:size-level', level),
+  setSkin: id => ipcRenderer.send('pet:set-skin', id),
+  importSkin: () => ipcRenderer.send('pet:import-skin'),
+  editDialogues: () => ipcRenderer.send('pet:edit-dialogues'),
+  setExperience: (key, value) => ipcRenderer.send('pet:set-experience', key, value),
+  setExperiences: partial => ipcRenderer.send('pet:set-experiences', partial),
+  setReducedMotion: reduced => ipcRenderer.send('pet:reduced-motion', reduced === true),
   skinLoadFailed: id => ipcRenderer.send('pet:skin-load-failed', id),
   startDrag: point => ipcRenderer.send('pet:drag-start', point),
   moveDrag: point => ipcRenderer.send('pet:drag-move', point),
@@ -18,5 +26,10 @@ contextBridge.exposeInMainWorld('petAPI', {
     const listener = (_event, state) => callback(state);
     ipcRenderer.on('pet:state', listener);
     return () => ipcRenderer.removeListener('pet:state', listener);
+  },
+  onOpenSettings: callback => {
+    const listener = () => callback();
+    ipcRenderer.on('pet:open-settings', listener);
+    return () => ipcRenderer.removeListener('pet:open-settings', listener);
   }
 });
