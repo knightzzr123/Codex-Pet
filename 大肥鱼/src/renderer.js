@@ -699,7 +699,7 @@ window.petAPI.getState().then(receiveState);
 
 let tickerHandle = null;
 function startTicker() {
-  if (tickerHandle !== null) return;
+  if (tickerHandle !== null || document.hidden) return;
   tickerHandle = setInterval(tick, 1000);
 }
 function stopTicker() {
