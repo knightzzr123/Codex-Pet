@@ -16,7 +16,7 @@ runtime_source.add_argument('--runtime-archive', type=Path, help='Use a standalo
 parser.add_argument('--output', type=Path, required=True)
 parser.add_argument('--verify-directory', type=Path)
 parser.add_argument('--metadata-directory', type=Path)
-parser.add_argument('--version', default='3.3.1')
+parser.add_argument('--version', default='3.3.2')
 args = parser.parse_args()
 root = args.root.resolve()
 output = args.output.resolve()

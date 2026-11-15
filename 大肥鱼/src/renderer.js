@@ -17,8 +17,12 @@ let previousRemaining = null;
 let otherRowsText = '';
 let pauseStarted = null;
 let settingsOpen = false;
+let settingsReturnFocus = null;
 let idleTimer = null;
 let lastIdleAt = Date.now();
+let lastInteractionAt = Date.now();
+let lastSessionToastId = 0;
+let sessionToastTimer = null;
 const reading = new Set();
 const motionPreference = window.matchMedia('(prefers-reduced-motion: reduce)');
 const MOTION = Object.freeze({
@@ -74,7 +78,12 @@ const { DEFAULT_DIALOGUES, fitDialogue } = globalThis.DafeiyuDialogue;
 let speechLines = [...DEFAULT_DIALOGUES.speech];
 let sleepyLines = [...DEFAULT_DIALOGUES.sleepy];
 let dialogueKey = '';
+const dialogueTrigger = globalThis.DafeiyuDialogueTriggers?.createDialogueTrigger?.() || null;
 const emptySpeech = '还没有日常台词，右键打开“编辑台词”添加一句吧。';
+
+function markInteraction() {
+  lastInteractionAt = Date.now();
+}
 
 function setSpeech(text) {
   speechAnimation?.cancel();
@@ -86,13 +95,27 @@ function setSpeech(text) {
     { opacity: 1, transform: 'translateY(0)' }
   ], { duration: MOTION.micro, easing: MOTION.ease });
 }
-function speak() {
+function speak(trigger = 'click') {
+  const decision = dialogueTrigger?.trigger?.(trigger, {
+    lines: speechLines,
+    sessionState: state.session?.state || 'idle',
+    idleIntervalSec: state.experience?.idleIntervalSec,
+    interactionAt: lastInteractionAt,
+    bubbleOpen: bubbleIsOpen()
+  });
+  // Idle chatter yields to cooldowns, session busy/error and duplicate lines;
+  // an explicit click always still does something.
+  if (trigger === 'idle' && !decision?.ok) return false;
+  const text = decision?.ok
+    ? decision.text
+    : speechLines.length ? speechLines[speechIndex++ % speechLines.length] : emptySpeech;
   bubbleMode = 'dialogue';
-  setSpeech(speechLines.length ? speechLines[speechIndex++ % speechLines.length] : emptySpeech);
+  setSpeech(text);
   dialogueStarted = true;
   sleepyReplyShown = false;
   renewBubble();
   render();
+  return true;
 }
 function showQuota() {
   bubbleMode = 'quota';
@@ -102,7 +125,15 @@ function showQuota() {
   render();
   window.petAPI.refresh();
 }
+let idleTicksSkipped = 0;
 function tick() {
+  const plan = globalThis.DafeiyuIdleBudget?.rendererTickPlan?.({
+    now: Date.now(), bubbleOpen: bubbleIsOpen(), settingsOpen, loading: state.loading,
+    lastIdleAt, idleIntervalMs: idleIntervalMs(), hidden: Boolean(document.hidden)
+  });
+  // While idle there is nothing to paint: the session chip and quota arrive as
+  // push events, and a closed bubble has no visible countdown.
+  if (plan && !plan.wake) { idleTicksSkipped += 1; return; }
   // TIMEOUTSIGNAL becomes an in-character sleepy sign-off before closing.
   if (pauseStarted === null && dialogueStarted && !sleepyReplyShown && Date.now() >= bubbleUntil) {
     if (!sleepyLines.length) { closeBubble(); return; }
@@ -134,6 +165,45 @@ function countdown(timestamp) {
   return `${minutes}分 ${seconds % 60}秒后重置`;
 }
 
+function showSessionToast(line) {
+  const toast = $('session-toast');
+  if (!toast) return;
+  clearTimeout(sessionToastTimer);
+  toast.textContent = line || 'Codex 状态有变化。';
+  toast.hidden = false;
+  sessionToastTimer = setTimeout(() => { toast.hidden = true; }, 8000);
+}
+
+function applySessionState() {
+  const session = state.session;
+  const mascot = $('mascot');
+  if (mascot?.dataset) mascot.dataset.session = session?.state || 'idle';
+  const chip = $('session-state');
+  const text = $('session-state-text');
+  if (chip) {
+    if (!session) {
+      chip.hidden = true;
+    } else {
+      chip.hidden = false;
+      if (chip.dataset) chip.dataset.state = session.state;
+      chip.classList.toggle('is-degraded', session.degraded === true);
+      if (text) text.textContent = session.label || '空闲';
+      chip.title = session.title || '';
+      chip.setAttribute?.('aria-label', `Codex 状态：${session.label || '空闲'}`);
+    }
+  }
+  const toast = $('session-toast');
+  if (!toast) return;
+  if (session?.state === 'error' && Number(session.toastId) > lastSessionToastId) {
+    lastSessionToastId = Number(session.toastId);
+    showSessionToast(session.line);
+  } else if (session?.state !== 'error') {
+    clearTimeout(sessionToastTimer);
+    sessionToastTimer = null;
+    toast.hidden = true;
+  }
+}
+
 function applyExperienceStyles() {
   const experience = state.experience || {};
   const root = document.documentElement?.style;
@@ -156,9 +226,27 @@ function syncSettingsControls() {
     if (skinBox && typeof skinBox.replaceChildren === 'function') {
       skinBox.replaceChildren(...skins.map(skin => {
         const button = document.createElement('button');
+        const active = state.skin?.id === skin.id;
         button.type = 'button';
-        button.className = `settings-chip${state.skin?.id === skin.id ? ' is-active' : ''}`;
-        button.textContent = skin.name;
+        button.className = `settings-chip${active ? ' is-active' : ''}`;
+        button.title = skin.name;
+        button.setAttribute?.('role', 'radio');
+        button.setAttribute?.('aria-checked', String(active));
+        button.setAttribute?.('aria-pressed', String(active));
+        button.setAttribute?.('aria-label', `${active ? '当前角色' : '切换到'}：${skin.name}`);
+        if (skin.thumbnailUrl && typeof button.append === 'function') {
+          const image = document.createElement('img');
+          image.className = 'settings-chip-thumb';
+          image.src = skin.thumbnailUrl;
+          image.alt = '';
+          image.loading = 'lazy';
+          image.setAttribute?.('aria-hidden', 'true');
+          const label = document.createElement('span');
+          label.textContent = skin.name;
+          button.append(image, label);
+        } else {
+          button.textContent = skin.name;
+        }
         button.addEventListener('click', () => window.petAPI.setSkin?.(skin.id));
         return button;
       }));
@@ -171,6 +259,7 @@ function syncSettingsControls() {
         button.className = 'settings-size-btn';
         button.setAttribute('data-level', String(level));
         button.textContent = `${level}`;
+        button.setAttribute('role', 'radio');
         button.setAttribute('aria-label', `大小 ${level} 档`);
         button.addEventListener('click', () => window.petAPI.setSizeLevel?.(level));
         sizeBox.append(button);
@@ -178,7 +267,9 @@ function syncSettingsControls() {
     }
     if (sizeBox && typeof sizeBox.querySelectorAll === 'function') {
       for (const button of sizeBox.querySelectorAll('.settings-size-btn')) {
-        button.classList.toggle('is-active', Number(button.getAttribute('data-level')) === sizeLevel);
+        const active = Number(button.getAttribute('data-level')) === sizeLevel;
+        button.classList.toggle('is-active', active);
+        button.setAttribute('aria-checked', String(active));
       }
     }
     const setRange = (id, valueId, value, format = v => v) => {
@@ -191,13 +282,33 @@ function syncSettingsControls() {
     setRange('settings-bubble-y', 'settings-bubble-y-value', experience.bubbleOffsetY || 0);
     setRange('settings-idle', 'settings-idle-value', experience.idleIntervalSec || 45);
     setRange('settings-opacity', 'settings-opacity-value', experience.opacity ?? 1, v => `${Math.round(Number(v) * 100)}%`);
+    const setToggle = (id, value) => { const input = $(id); if (input) input.checked = Boolean(value); };
+    setToggle('settings-advance', experience.advanceOnPetTap);
+    setToggle('settings-mirror', experience.mirrorOnLeft !== false);
+    setToggle('settings-reduced', experience.reducedMotion);
+    const seconds = experience.bubbleSeconds ?? 8;
+    const secondsValue = $('settings-bubble-seconds-value');
+    if (secondsValue) secondsValue.textContent = seconds === 0 ? '保持显示' : `${seconds} 秒`;
+    const sizeValue = $('settings-size-value');
+    if (sizeValue) sizeValue.textContent = `${sizeLevel} 档`;
+    for (const button of panel.querySelectorAll?.('[data-bubble-seconds]') || []) {
+      const active = Number(button.getAttribute('data-bubble-seconds')) === seconds;
+      button.classList.toggle('is-active', active);
+      button.setAttribute('aria-checked', String(active));
+    }
   } catch {
     // Unit fixture DOM is intentionally incomplete.
   }
 }
 
 function setSettingsOpen(open) {
-  settingsOpen = Boolean(open);
+  const next = Boolean(open);
+  if (next === settingsOpen) {
+    if (next) $('settings-close')?.focus?.({ preventScroll: true });
+    return;
+  }
+  if (next) settingsReturnFocus = document.activeElement || null;
+  settingsOpen = next;
   const panel = $('settings-panel');
   if (!panel) return;
   panel.hidden = !settingsOpen;
@@ -205,6 +316,13 @@ function setSettingsOpen(open) {
   document.body.classList.toggle('settings-open', settingsOpen);
   // Keep native hit-testing large enough for the panel without blocking pet drag when closed.
   globalThis.petAPI.setInputRegion(settingsOpen || bubbleIsOpen());
+  if (settingsOpen) {
+    $('settings-close')?.focus?.({ preventScroll: true });
+  } else {
+    const target = settingsReturnFocus && settingsReturnFocus !== document.body ? settingsReturnFocus : $('pet');
+    try { target?.focus?.({ preventScroll: true }); } catch {}
+    settingsReturnFocus = null;
+  }
 }
 
 function maybeIdleAction() {
@@ -212,6 +330,9 @@ function maybeIdleAction() {
   if (Date.now() - lastIdleAt < idleIntervalMs()) return;
   lastIdleAt = Date.now();
   playIdleNudge();
+  // Idle speech is optional: the trigger module applies the long cooldown,
+  // session-state suppression and line deduplication.
+  speak('idle');
 }
 
 function playIdleNudge() {
@@ -326,11 +447,13 @@ function render() {
   $('refresh').classList.toggle('loading', state.loading);
   $('refresh').ariaBusy = String(state.loading);
   $('refresh').title = state.loading ? '正在刷新额度' : cooldown ? `${cooldown} 秒后可再次刷新` : '刷新额度';
+  applySessionState();
   syncSettingsControls();
 }
 
 function pat() {
   lastIdleAt = Date.now();
+  markInteraction();
   if (state.experience?.advanceOnPetTap && bubbleIsOpen()) speak();
   else showQuota();
   playReaction();
@@ -339,6 +462,7 @@ function playReaction() {
   cancelPetMotion();
   reactionAnimation?.cancel();
   lastIdleAt = Date.now();
+  markInteraction();
   if (reducedMotion()) return;
   petAnimation = $('pet-image').animate([
     { transform: 'translateY(0) scale(1, 1)', offset: 0 },
@@ -385,6 +509,7 @@ $('pet').addEventListener('pointerdown', event => {
   // Settings panel stays open; dragging the pet must still work (panel does not capture pet).
   cancelDrag();
   cancelPetMotion();
+  markInteraction();
   suppressClick = false;
   pointerDrag = { id: event.pointerId, x: event.screenX, y: event.screenY, moved: false, menuOpened: false };
   setReading('drag', true);
@@ -445,6 +570,7 @@ $('pet').addEventListener('lostpointercapture', releaseDrag);
 $('refresh').addEventListener('click', () => window.petAPI.refresh());
 $('bubble').addEventListener('click', event => {
   if (event.target.closest('#refresh, #other-windows')) return;
+  markInteraction();
   speak();
   playReaction();
 });
@@ -459,6 +585,7 @@ $('bubble').addEventListener('focusout', event => {
 $('bubble').addEventListener('keydown', event => {
   if (event.target !== $('bubble') || !['Enter', ' '].includes(event.key)) return;
   event.preventDefault();
+  markInteraction();
   speak();
   playReaction();
 });
@@ -478,8 +605,29 @@ motionPreference.addEventListener('change', () => {
 });
 
 $('settings-close')?.addEventListener('click', () => setSettingsOpen(false));
+// The panel is a modal dialog: keep Tab/Shift+Tab inside it until it closes.
+$('settings-panel')?.addEventListener('keydown', event => {
+  if (event.key !== 'Tab' || !settingsOpen) return;
+  const panel = $('settings-panel');
+  const focusable = typeof panel.querySelectorAll === 'function'
+    ? [...panel.querySelectorAll('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])')]
+      .filter(node => !node.hidden)
+    : [];
+  if (!focusable.length) return;
+  const first = focusable[0], last = focusable.at(-1);
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus?.({ preventScroll: true });
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus?.({ preventScroll: true });
+  }
+});
 $('settings-import-skin')?.addEventListener('click', () => window.petAPI.importSkin());
+$('settings-import-pack')?.addEventListener('click', () => window.petAPI.importSkinPack());
 $('settings-edit-dialogues')?.addEventListener('click', () => window.petAPI.editDialogues());
+$('settings-export-preferences')?.addEventListener('click', () => window.petAPI.exportPreferences());
+$('settings-import-preferences')?.addEventListener('click', () => window.petAPI.importPreferences());
 for (const [id, key, cast] of [
   ['settings-bubble-x', 'bubbleOffsetX', Number],
   ['settings-bubble-y', 'bubbleOffsetY', Number],
@@ -489,12 +637,39 @@ for (const [id, key, cast] of [
   $(id)?.addEventListener('input', event => {
     const value = cast(event.target.value);
     window.petAPI.setExperience(key, value);
-    if (key === 'bubbleOffsetX') $('settings-bubble-x-value').textContent = String(value);
-    if (key === 'bubbleOffsetY') $('settings-bubble-y-value').textContent = String(value);
+    // Apply the visible part immediately; the main process persists the same
+    // value and returns the canonical (clamped) state a moment later.
+    if (key === 'bubbleOffsetX') {
+      document.documentElement?.style?.setProperty('--bubble-offset-x', `${value}px`);
+      $('settings-bubble-x-value').textContent = String(value);
+    }
+    if (key === 'bubbleOffsetY') {
+      document.documentElement?.style?.setProperty('--bubble-offset-y', `${value}px`);
+      $('settings-bubble-y-value').textContent = String(value);
+    }
     if (key === 'idleIntervalSec') $('settings-idle-value').textContent = String(value);
-    if (key === 'opacity') $('settings-opacity-value').textContent = `${Math.round(value * 100)}%`;
+    if (key === 'opacity') {
+      document.documentElement?.style?.setProperty('--pet-opacity', String(Math.max(0.35, Math.min(1, value))));
+      $('settings-opacity-value').textContent = `${Math.round(value * 100)}%`;
+    }
   });
 }
+const setToggle = (id, key) => $(id)?.addEventListener('change', event => {
+  window.petAPI.setExperience?.(key, event.target.checked);
+});
+setToggle('settings-advance', 'advanceOnPetTap');
+setToggle('settings-mirror', 'mirrorOnLeft');
+setToggle('settings-reduced', 'reducedMotion');
+for (const button of document.querySelectorAll?.('[data-bubble-seconds]') || []) {
+  button.addEventListener('click', () => window.petAPI.setExperience?.('bubbleSeconds', Number(button.getAttribute('data-bubble-seconds'))));
+}
+for (const button of document.querySelectorAll?.('[data-reset-key]') || []) {
+  button.addEventListener('click', () => window.petAPI.resetSetting?.(button.getAttribute('data-reset-key')));
+}
+for (const button of document.querySelectorAll?.('[data-reset-group]') || []) {
+  button.addEventListener('click', () => window.petAPI.resetGroup?.(button.getAttribute('data-reset-group')));
+}
+$('settings-reset-all')?.addEventListener('click', () => window.petAPI.resetAll?.());
 window.petAPI.onOpenSettings?.(() => setSettingsOpen(true));
 
 function receiveState(next) {
@@ -508,6 +683,7 @@ function receiveState(next) {
       dialogueKey = nextKey;
       speechLines = [...library.speech]; sleepyLines = [...library.sleepy];
       speechIndex = 0; sleepyIndex = 0;
+      dialogueTrigger?.reset?.();
       if (wasOpen && bubbleMode === 'dialogue') {
         setSpeech(sleepyReplyShown && sleepyLines.length ? sleepyLines[sleepyIndex++ % sleepyLines.length]
           : speechLines.length ? speechLines[speechIndex++ % speechLines.length] : emptySpeech);
@@ -520,4 +696,21 @@ function receiveState(next) {
 }
 window.petAPI.onState(receiveState);
 window.petAPI.getState().then(receiveState);
-setInterval(tick, 1000);
+
+let tickerHandle = null;
+function startTicker() {
+  if (tickerHandle !== null || document.hidden) return;
+  tickerHandle = setInterval(tick, 1000);
+}
+function stopTicker() {
+  if (tickerHandle === null) return;
+  if (typeof clearInterval === 'function') clearInterval(tickerHandle);
+  tickerHandle = null;
+}
+startTicker();
+// Hidden means Codex was minimized/tucked away; no visible countdown or idle
+// animation is needed, so suspend the 1s tick entirely until it returns.
+document.addEventListener?.('visibilitychange', () => {
+  if (document.hidden) stopTicker();
+  else startTicker();
+});

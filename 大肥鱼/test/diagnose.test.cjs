@@ -10,7 +10,7 @@ function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dafeiyu-diagnose-'));
   for (const file of ['plugin.json', '.codex-plugin/plugin.json', 'package.json', 'prepare-runtime.ps1', 'runtime-manifest.json', 'src/plugin-server.cjs', '.agents/plugins/marketplace.json', 'README.md']) {
     const target = path.join(root, file); fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.writeFileSync(target, file.endsWith('.json') ? JSON.stringify({ version: '3.3.1' }) : 'fixture');
+    fs.writeFileSync(target, file.endsWith('.json') ? JSON.stringify({ version: '3.3.2' }) : 'fixture');
   }
   fs.writeFileSync(path.join(root, 'runtime-manifest.json'), JSON.stringify({ bytes: 0, sha256: crypto.createHash('sha256').update('').digest('hex') }));
   return root;

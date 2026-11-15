@@ -9,14 +9,22 @@ const { pathToFileURL } = require('node:url');
 const { readQuota } = require('./quota.cjs');
 const { scopedBounds, snapBounds, clampBounds, shouldShow } = require('./scope.cjs');
 const { writeJsonAtomic, createCoalescedWriter } = require('./persist.cjs');
+const { DEFAULT_SKIN_ID, EXPERIENCE_KEYS, GROUP_KEYS, ALL_RESET_KEYS, resetPreferenceKeys, settingsKeyDefault } = require('./settings-ia.cjs');
 const { createDebouncedShowHide, createDebouncedDiskStatus } = require('./scope-visibility.cjs');
 const { SIZE_SCALES, DEFAULT_SIZE_LEVEL, isSizeLevel, sizeLevelFromPreferences, scaleForLevel } = require('./size.cjs');
 const { getDataDir, getWorkDir } = require('./paths.cjs');
 const { SkinLibrary, readImageFile } = require('./skins.cjs');
+const { SkinPackLibrary, packCharacterId, parsePackCharacterId } = require('./skin-packs.cjs');
+const {
+  buildPreferencesBundle, parsePreferencesBundle, PREFERENCES_FILE_NAME, PREFERENCES_FILE_MAX_BYTES
+} = require('./preferences-bundle.cjs');
+const { IDLE_BUDGET, sessionProbeDelay, pluginPollDelay, shouldSaveRuntime } = require('./idle-budget.js');
 const { openSkinEditor, getEditorWindow } = require('./skin-editor.cjs');
 const { DialogueLibrary, defaultDialogues } = require('./dialogues.cjs');
 const { openDialogueEditor, getDialogueEditorWindow } = require('./dialogue-editor.cjs');
 const { BUBBLE_SECONDS, experienceFromPreferences } = require('./experience.cjs');
+const { createCodexSessionProbe } = require('./codex-session-probe.cjs');
+const { createSessionStateTracker, sessionPresentation } = require('./session-state.cjs');
 const { VIEWPORT, inputRegions } = require('./layout.cjs');
 const {
   interpolateBounds, interpolateZoom, boundsDiffer, zoomDiffer, settleDurationMs, createSettlePlayer
@@ -34,11 +42,13 @@ app.setName('大肥鱼 · Codex Pet');
 app.setPath('userData', smokeTest ? path.join(work, 'smoke-data') : dataDir);
 if (!app.requestSingleInstanceLock()) { app.quit(); }
 else {
-  let win, interval, scopeMonitor, pluginInterval, functionMenu;
+  let win, interval, scopeMonitor, pluginInterval, sessionTimer, sessionTracker, functionMenu;
   let scope = { active: false };
   let closing = false;
   let refreshPromise = null;
   let lastAttempt = 0;
+  let lastRuntimeSavedAt = 0;
+  let lastSessionVisible = null;
   let inputBubble = false;
   let inputRegionKey = '';
   let drag = null;
@@ -60,6 +70,7 @@ else {
     } catch {}
   }
   const skins = new SkinLibrary(app.getPath('userData'));
+  const skinPacks = new SkinPackLibrary(app.getPath('userData'));
   const dialogueLibrary = new DialogueLibrary(app.getPath('userData'));
   const defaultSkin = { id: 'default', name: '默认 · 鲸鱼娘', url: pathToFileURL(path.join(project, 'assets', 'pet.png')).href };
   const builtInSkins = [defaultSkin, {
@@ -81,6 +92,12 @@ else {
   state.dialogues = smokeTest ? defaultDialogues() : dialogueLibrary.load();
   state.skin = skinState(preferences.skinId);
   preferences.skinId = state.skin.id;
+  const sessionProbe = createCodexSessionProbe({ now: Date.now });
+  sessionTracker = createSessionStateTracker({
+    probe: () => sessionProbe.sample(),
+    onUpdate: snapshot => { writeSessionStatus(snapshot); publish(); }
+  });
+  state.session = sessionPresentation(sessionTracker.snapshot());
   try { state.quota = JSON.parse(fs.readFileSync(path.join(initialData, 'quota-cache.json'), 'utf8')); state.stale = true; } catch {}
 
   const preferencesWriter = createCoalescedWriter({
@@ -103,6 +120,41 @@ else {
     }
     preferencesWriter.schedule(snapshot);
   }
+  function writeSessionStatus(snapshot) {
+    try {
+      fs.mkdirSync(work, { recursive: true });
+      writeJsonAtomic(path.join(work, 'session-state.json'), { ...sessionPresentation(snapshot), activityAt: snapshot.activityAt, errorAt: snapshot.errorAt, checkedAt: new Date().toISOString() });
+    } catch {}
+  }
+  function sessionVisible() {
+    return Boolean(win && !win.isDestroyed() && win.isVisible() && shouldShow(scope));
+  }
+  function scheduleSessionProbe({ immediate = false } = {}) {
+    if (smokeTest || !sessionTracker) return;
+    if (sessionTimer) { clearTimeout(sessionTimer); sessionTimer = null; }
+    const visible = sessionVisible();
+    lastSessionVisible = visible;
+    const delay = immediate ? 0 : sessionProbeDelay({ visible });
+    sessionTimer = setTimeout(() => {
+      sessionTimer = null;
+      try { if (!closing) sessionTracker.sample(); } catch {}
+      scheduleSessionProbe();
+    }, delay);
+  }
+  function startSessionProbe() {
+    if (!sessionTracker) return;
+    writeSessionStatus(sessionTracker.snapshot());
+    sessionTracker.sample();
+    scheduleSessionProbe();
+  }
+  // Only hidden->visible changes need an immediate sample; ordinary scope
+  // updates must not turn this into a 1s foreground probe.
+  function refreshSessionSchedule() {
+    if (smokeTest || !sessionTracker) return;
+    const visible = sessionVisible();
+    if (visible === lastSessionVisible) return;
+    scheduleSessionProbe({ immediate: visible });
+  }
   function flushPersistentState() {
     try { preferencesWriter.flush(); } catch {}
     try { scopeStatusWriter.flush(); } catch {}
@@ -115,6 +167,19 @@ else {
       startedAt: startupStartedAt, updatedAt: Date.now()
     }));
     fs.renameSync(temporary, file);
+    lastRuntimeSavedAt = Date.now();
+  }
+  function writeIdleBudgetSnapshot(reason) {
+    try {
+      const visible = sessionVisible();
+      fs.mkdirSync(work, { recursive: true });
+      writeJsonAtomic(path.join(work, 'idle-budget.json'), {
+        budget: IDLE_BUDGET, reason, visible,
+        sessionProbeMs: sessionProbeDelay({ visible }),
+        pluginPollMs: pluginPollDelay(),
+        updatedAt: new Date().toISOString()
+      });
+    } catch {}
   }
   function applyExperienceChrome() {
     const experience = experienceFromPreferences(preferences);
@@ -123,9 +188,10 @@ else {
     }
   }
   function publish() {
+    if (sessionTracker) state.session = sessionPresentation(sessionTracker.snapshot());
     state.experience = experienceFromPreferences(preferences);
     state.sizeLevel = preferences.sizeLevel;
-    state.skins = [...builtInSkins, ...skins.list()].map(skin => ({ id: skin.id, name: skin.name }));
+    state.skins = listSkins();
     state.anchorLeft = preferences.placement?.anchorX === 'left';
     state.refreshAvailableAt = lastAttempt ? lastAttempt + 10000 : 0;
     try { applyExperienceChrome(); } catch {}
@@ -161,6 +227,19 @@ else {
     applyExperienceChrome();
     updateInputRegion();
     publish();
+  }
+  function resetPreferences(keys = []) {
+    const result = resetPreferenceKeys(preferences, keys);
+    if (!result.changed.length) { publish(); return false; }
+    const changed = new Set(result.changed);
+    if (changed.has('skinId')) setSkin(DEFAULT_SKIN_ID);
+    if (changed.has('sizeLevel')) setSizeLevel(DEFAULT_SIZE_LEVEL);
+    const experience = {};
+    for (const key of result.changed) {
+      if (EXPERIENCE_KEYS.includes(key)) experience[key] = settingsKeyDefault(key);
+    }
+    if (Object.keys(experience).length) setExperiences(experience);
+    return true;
   }
   function resetPlacement() {
     cancelDrag();
@@ -205,11 +284,26 @@ else {
     publish();
     return geometrySettled;
   }
+  function allSkins() {
+    const builtIns = builtInSkins.map(skin => ({ ...skin, kind: 'builtin' }));
+    const images = skins.list().map(skin => ({
+      id: skin.id, name: skin.name, kind: 'image', url: pathToFileURL(skin.file).href
+    }));
+    // A pack may contain several characters. Each character is addressed by a
+    // stable `pack:<packId>:<characterId>` key stored in the same skinId field
+    // as legacy images, so switching never starts another window or process.
+    const packed = skinPacks.list().flatMap(pack => pack.characters.map(character => ({
+      id: packCharacterId(pack.id, character.id),
+      name: `${pack.name} · ${character.name}`,
+      kind: 'pack', packId: pack.id, characterId: character.id,
+      url: pathToFileURL(character.file).href,
+      thumbnailUrl: pathToFileURL(character.thumbnailFile || character.file).href
+    })));
+    return [...builtIns, ...images, ...packed];
+  }
   function skinState(id) {
-    const builtIn = builtInSkins.find(skin => skin.id === id);
-    if (builtIn) return { ...builtIn };
-    const skin = skins.get(id);
-    return skin ? { id: skin.id, name: skin.name, url: pathToFileURL(skin.file).href } : { ...defaultSkin };
+    const found = allSkins().find(skin => skin.id === id);
+    return found ? { ...found } : { ...defaultSkin, kind: 'builtin' };
   }
   function setSkin(id) {
     cancelDrag();
@@ -236,6 +330,52 @@ else {
     const skin = await skins.import(file, validateSkinImage);
     setSkin(skin.id);
     return skin;
+  }
+  async function chooseSkinPack() {
+    if (importingSkin || deletingSkin || editingDialogues) return;
+    importingSkin = true;
+    cancelDrag();
+    try {
+      const result = await dialog.showOpenDialog(win, {
+        title: '导入皮肤包文件夹', buttonLabel: '导入皮肤包', properties: ['openDirectory'],
+        message: '选择包含 manifest.json、角色图片和缩略图的文件夹'
+      });
+      if (result.canceled || !result.filePaths[0]) return;
+      const pack = await skinPacks.importDirectory(result.filePaths[0], validateSkinImage);
+      if (!pack?.characters?.length) throw new Error('皮肤包没有可用角色。');
+      const first = pack.characters[0];
+      setSkin(packCharacterId(pack.id, first.id));
+      await dialog.showMessageBox(win, {
+        type: 'info', title: '皮肤包已导入', message: `已导入“${pack.name}”`,
+        detail: `包含 ${pack.characters.length} 个角色，可在设置的“外观”分组中切换。`
+      });
+    } catch (error) {
+      await dialog.showMessageBox(win, { type: 'error', title: '无法导入皮肤包',
+        message: '皮肤包导入失败',
+        detail: error.code ? '无法读取或保存皮肤包，请确认文件夹和文件可读、数据目录可写。' : error.message });
+    } finally { importingSkin = false; }
+  }
+  async function deleteImportedPack(id) {
+    if (importingSkin || deletingSkin || editingDialogues) return false;
+    const pack = skinPacks.get(id);
+    if (!pack) return false;
+    deletingSkin = true;
+    cancelDrag();
+    try {
+      const result = await dialog.showMessageBox(win, {
+        type: 'question', title: '删除皮肤包', message: `删除“${pack.name}”？`,
+        detail: `删除插件中保存的整个皮肤包（${pack.characters.length} 个角色），原始文件夹仍会保留。`,
+        buttons: ['取消', '删除'], defaultId: 0, cancelId: 0, noLink: true
+      });
+      if (result.response !== 1 || !skinPacks.remove(id)) return false;
+      const selected = parsePackCharacterId(state.skin.id);
+      if (selected?.packId === id) setSkin('default');
+      return true;
+    } catch (error) {
+      await dialog.showMessageBox(win, { type: 'error', title: '无法删除皮肤包',
+        message: '皮肤包删除失败', detail: error.code ? '无法删除保存的皮肤包，请检查文件是否被占用或目录是否可写。' : error.message });
+      return false;
+    } finally { deletingSkin = false; }
   }
   async function chooseSkinImage() {
     if (importingSkin || deletingSkin || editingDialogues) return;
@@ -281,6 +421,63 @@ else {
       return false;
     } finally { deletingSkin = false; }
   }
+  async function applyPreferencesSettings(settings = {}) {
+    if (settings.sizeLevel !== undefined && settings.sizeLevel !== preferences.sizeLevel) {
+      await setSizeLevel(settings.sizeLevel);
+    }
+    const experience = {};
+    for (const key of EXPERIENCE_KEYS) if (Object.hasOwn(settings, key)) experience[key] = settings[key];
+    if (Object.keys(experience).length) setExperiences(experience);
+    if (typeof settings.skinId === 'string' && settings.skinId && settings.skinId !== state.skin.id) {
+      setSkin(settings.skinId);
+    }
+    savePreferences({ immediate: true });
+  }
+  async function exportPreferences() {
+    cancelDrag();
+    try {
+      const result = await dialog.showSaveDialog(win, {
+        title: '导出偏好', defaultPath: PREFERENCES_FILE_NAME,
+        filters: [{ name: '大肥鱼偏好', extensions: ['json'] }]
+      });
+      if (result.canceled || !result.filePath) return false;
+      const bundle = buildPreferencesBundle(preferences, listSkins());
+      writeJsonAtomic(result.filePath, bundle);
+      await dialog.showMessageBox(win, {
+        type: 'info', title: '偏好已导出', message: '已导出设置与皮肤清单',
+        detail: '文件不包含任何图片、缩略图、本地路径或自定义台词。'
+      });
+      return true;
+    } catch (error) {
+      await dialog.showMessageBox(win, { type: 'error', title: '无法导出偏好',
+        message: '偏好导出失败', detail: error.code ? '无法写入所选位置，请换一个文件夹或检查权限。' : error.message });
+      return false;
+    }
+  }
+  async function importPreferences() {
+    cancelDrag();
+    try {
+      const result = await dialog.showOpenDialog(win, {
+        title: '导入偏好', properties: ['openFile'],
+        filters: [{ name: '大肥鱼偏好', extensions: ['json'] }]
+      });
+      if (result.canceled || !result.filePaths[0]) return false;
+      const file = result.filePaths[0];
+      const stat = fs.statSync(file);
+      if (!stat.isFile() || stat.size > PREFERENCES_FILE_MAX_BYTES) throw new Error('偏好文件过大。');
+      const parsed = parsePreferencesBundle(fs.readFileSync(file, 'utf8'), { catalog: listSkins() });
+      await applyPreferencesSettings(parsed.settings);
+      await dialog.showMessageBox(win, {
+        type: 'info', title: '偏好已导入', message: '设置与皮肤选择已应用',
+        detail: ['未包含图片或台词；本机缺失的皮肤会回退到默认角色。', ...parsed.warnings].join('\n')
+      });
+      return true;
+    } catch (error) {
+      await dialog.showMessageBox(win, { type: 'error', title: '无法导入偏好',
+        message: '偏好导入失败', detail: error.code ? '无法读取所选文件，请确认文件存在且可读。' : error.message });
+      return false;
+    }
+  }
   async function chooseDialogueEditor() {
     if (editingDialogues || importingSkin || deletingSkin) return;
     editingDialogues = true; cancelDrag();
@@ -295,7 +492,7 @@ else {
     publish();
   }
   function listSkins() {
-    return [...builtInSkins, ...skins.list()].map(skin => ({ id: skin.id, name: skin.name }));
+    return allSkins().map(({ id, name, kind, thumbnailUrl }) => ({ id, name, kind, thumbnailUrl }));
   }
   function openSettingsPanel() {
     cancelDrag();
@@ -303,10 +500,12 @@ else {
   }
   function buildFunctionMenu() {
     const importedSkins = skins.list();
+    const importedPacks = skinPacks.list();
+    const busySkin = importingSkin || deletingSkin;
     // Skin / size / dialogues live in the dedicated settings panel. Menu keeps
     // a single entry plus a few advanced toggles so drag is never blocked.
     return Menu.buildFromTemplate([
-      { label: '打开设置…', enabled: !importingSkin && !deletingSkin, click: openSettingsPanel },
+      { label: '打开设置…', enabled: !busySkin, click: openSettingsPanel },
       { label: '互动选项', submenu: [
         { label: '对话框停留', submenu: BUBBLE_SECONDS.map(seconds => ({
           label: seconds === 0 ? '保持显示（Esc 收起）' : `${seconds} 秒${seconds === 8 ? '（默认）' : ''}`,
@@ -320,11 +519,17 @@ else {
         { label: '减少动画', type: 'checkbox', checked: preferences.reducedMotion,
           click: item => setExperience('reducedMotion', item.checked) }
       ] },
-      { label: '删除导入皮肤', enabled: importedSkins.length > 0 && !importingSkin && !deletingSkin,
-        submenu: importedSkins.map(skin => ({
-          label: `${skin.name.replace(/&/g, '&&')}${state.skin.id === skin.id ? '（当前使用）' : ''}`,
-          click: () => deleteImportedSkin(skin.id)
-        })) },
+      { label: '删除导入皮肤', enabled: (importedSkins.length > 0 || importedPacks.length > 0) && !busySkin,
+        submenu: [
+          ...importedSkins.map(skin => ({
+            label: `${skin.name.replace(/&/g, '&&')}${state.skin.id === skin.id ? '（当前使用）' : ''}`,
+            click: () => deleteImportedSkin(skin.id)
+          })),
+          ...importedPacks.map(pack => ({
+            label: `皮肤包：${pack.name.replace(/&/g, '&&')}（${pack.characters.length} 个角色）`,
+            click: () => deleteImportedPack(pack.id)
+          }))
+        ] },
       { label: '回到右下角', click: resetPlacement },
       { type: 'separator' },
       { label: '刷新额度', enabled: !state.loading && Date.now() - lastAttempt >= 10000, click: () => refresh() }
@@ -513,6 +718,7 @@ else {
     }
     // Skip disk I/O while the user is dragging to avoid frame drops.
     if (!drag) publishScopeStatus(false);
+    try { refreshSessionSchedule(); } catch {}
   }
   function startScopeMonitor() {
     const handle = win.getNativeWindowHandle();
@@ -1017,9 +1223,16 @@ else {
     ipcMain.on('pet:size-level', (_event, level) => setSizeLevel(Number(level)));
     ipcMain.on('pet:set-skin', (_event, id) => setSkin(id));
     ipcMain.on('pet:import-skin', () => { chooseSkinImage(); });
+    ipcMain.on('pet:import-skin-pack', () => { chooseSkinPack(); });
+    ipcMain.on('pet:delete-skin-pack', (_event, id) => { deleteImportedPack(id); });
     ipcMain.on('pet:edit-dialogues', () => { chooseDialogueEditor(); });
+    ipcMain.on('pet:export-preferences', () => { exportPreferences(); });
+    ipcMain.on('pet:import-preferences', () => { importPreferences(); });
     ipcMain.on('pet:set-experience', (_event, key, value) => setExperience(key, value));
     ipcMain.on('pet:set-experiences', (_event, partial) => setExperiences(partial || {}));
+    ipcMain.on('pet:reset-setting', (_event, key) => { if (typeof key === 'string') resetPreferences([key]); });
+    ipcMain.on('pet:reset-group', (_event, groupId) => { if (typeof groupId === 'string') resetPreferences(GROUP_KEYS[groupId] || []); });
+    ipcMain.on('pet:reset-all', () => resetPreferences(ALL_RESET_KEYS));
     ipcMain.on('pet:reduced-motion', (_event, value) => {
       rendererReducedMotion = value === true;
       if (motionReduced()) cancelSettle({ apply: true });
@@ -1037,6 +1250,7 @@ else {
     });
     // Compile/load the native binding while Chromium loads the renderer.
     startScopeMonitor();
+    if (!smokeTest) startSessionProbe();
     win.on('closed', () => { logLifecycle({ event: 'window-closed', closing }); app.quit(); });
     win.webContents.on('render-process-gone', (_event, details) => {
       if (closing || win.isDestroyed()) return;
@@ -1053,6 +1267,7 @@ else {
     screen.on('display-removed', positionWindow);
     screen.on('display-added', positionWindow);
     await loadRenderer();
+    writeIdleBudgetSnapshot('startup');
     if (smokeTest) {
       // Native monitoring first compiles its interop helper. Wait for a usable
       // Codex observation before exercising size changes and focus recovery.
@@ -1077,8 +1292,10 @@ else {
         if (isDisabled() || windowLifetime.shouldExit(active)) {
           logLifecycle({ event: 'plugin-exit', reason: active ? 'plugin-disabled-or-codex-exited' : 'codex-exited-or-never-bound' });
           app.quit();
-        } else { try { saveRuntime(); } catch {} }
-      }, 1500);
+        } else if (shouldSaveRuntime({ now: Date.now(), lastSavedAt: lastRuntimeSavedAt })) {
+          try { saveRuntime(); } catch {}
+        }
+      }, pluginPollDelay());
     }
   }).catch(error => {
     fs.mkdirSync(work, { recursive: true });
@@ -1086,6 +1303,6 @@ else {
     console.error(error); app.exit(1);
   });
   app.on('second-instance', () => { if (win) updateScope(scope); });
-  app.on('before-quit', () => { closing = true; try { cancelSettle({ apply: true }); } catch {} clearInterval(interval); clearInterval(pluginInterval); scopeMonitor?.stop(); try { scopeVisibility?.flush(); } catch {}; flushPersistentState(); });
+  app.on('before-quit', () => { closing = true; try { cancelSettle({ apply: true }); } catch {} clearInterval(interval); clearInterval(pluginInterval); if (sessionTimer) clearTimeout(sessionTimer); scopeMonitor?.stop(); try { scopeVisibility?.flush(); } catch {}; flushPersistentState(); });
   app.on('will-quit', flushPersistentState);
 }

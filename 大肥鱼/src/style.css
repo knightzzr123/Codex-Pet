@@ -12,7 +12,9 @@
 * { box-sizing: border-box; }
 html, body { margin: 0; width: 360px; height: 560px; background: transparent; overflow: hidden; user-select: none; }
 button { font: inherit; border: 0; padding: 0; cursor: pointer; color: inherit; }
-button:focus-visible, input:focus-visible { outline: 3px solid #82cbed; outline-offset: 3px; }
+button:focus-visible, input:focus-visible, #bubble:focus-visible {
+  outline: 3px solid #82cbed; outline-offset: 3px;
+}
 #mascot { position: relative; width: 360px; height: 560px; isolation: isolate; opacity: var(--pet-opacity); transition: opacity var(--motion-panel) var(--motion-ease); }
 #speech-anchor {
   position: absolute; inset: 0; z-index: 10; pointer-events: none;
@@ -73,6 +75,30 @@ body.face-left .dot-one { left: calc(175px + var(--bubble-offset-x)); transform:
 body.face-left .dot-two { left: calc(149px + var(--bubble-offset-x)); transform: rotate(-12deg); }
 body.face-left #reaction { right: auto; left: 77px; }
 #pet:hover #pet-image { filter: drop-shadow(0 0 5px #8ea9e94d); }
+#mascot[data-session="busy"] #pet-image { filter: saturate(1.08) drop-shadow(0 0 6px #d9985440); }
+#mascot[data-session="error"] #pet-image { filter: saturate(.72) drop-shadow(0 0 6px #d7666640); }
+.session-state {
+  position: absolute; z-index: 8; right: 22px; bottom: 236px;
+  display: flex; align-items: center; gap: 6px; max-width: 150px;
+  padding: 4px 9px; border: 2px solid #273976; border-radius: 999px;
+  background: #fffefcdd; color: #30447e; font-size: 11px; line-height: 14px;
+  font-weight: 800; pointer-events: none;
+  transition: opacity var(--motion-micro) var(--motion-ease), transform var(--motion-micro) var(--motion-ease);
+}
+.session-state[hidden], .session-toast[hidden] { display: none; }
+.session-state.is-degraded { opacity: .72; }
+.session-dot { flex: 0 0 7px; width: 7px; height: 7px; border-radius: 100%; background: #93a1c0; }
+.session-state[data-state="busy"] .session-dot { background: #d99854; animation: session-pulse 1.4s ease-in-out infinite; }
+.session-state[data-state="error"] .session-dot { background: #d76666; }
+.session-toast {
+  position: absolute; z-index: 9; right: 24px; bottom: 266px; max-width: 230px;
+  padding: 8px 12px; border: 3px solid #273976; border-radius: 16px;
+  background: #fffefc; color: #30447e; font-size: 12px; line-height: 17px;
+  font-weight: 700; pointer-events: none; box-shadow: 0 5px 0 #52629b18;
+}
+body.face-left .session-state { right: auto; left: 22px; }
+body.face-left .session-toast { right: auto; left: 24px; }
+@keyframes session-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
 #reaction { position: absolute; z-index: 6; bottom: 192px; right: 77px; font-size: 30px; font-weight: 800; color: #ee95bd; opacity: 0; pointer-events: none; }
 body.no-bubble #bubble { opacity: 0; visibility: hidden; pointer-events: none; transform: translateY(8px) scale(.96); transition: opacity var(--motion-micro) var(--motion-ease), transform var(--motion-panel) var(--motion-ease), visibility 0s var(--motion-micro); }
 body.no-bubble .thought-dot { opacity: 0; visibility: hidden; transition-delay: 0s, var(--motion-micro); }
@@ -111,13 +137,40 @@ body.multiple #other-windows { max-height: 34px; }
   min-height: 44px; min-width: 44px; padding: 8px 12px; border-radius: 999px;
   background: #edf2ff; color: #30447e; font-size: 13px; font-weight: 700;
 }
+.settings-chip { display: inline-flex; align-items: center; gap: 6px; }
+.settings-chip-thumb {
+  width: 26px; height: 26px; border-radius: 7px; object-fit: cover;
+  background: #fffefc; border: 1px solid #b9c8ea; flex: 0 0 auto;
+}
+.settings-chip.is-active .settings-chip-thumb { border-color: #fffefc; }
 .settings-chip.is-active, .settings-size-btn.is-active { background: #273976; color: #fffefc; }
 .settings-action { width: 100%; }
+.settings-data { margin-top: 4px; }
+.settings-data .settings-action { width: auto; flex: 1 1 120px; }
+.settings-hint { margin: 8px 0 0; font-size: 10px; line-height: 14px; color: #8a9ac0; }
 .settings-field {
   display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; align-items: center;
   margin-top: 8px; font-size: 12px; font-weight: 700; color: #586b9e;
 }
 .settings-field input[type="range"] { grid-column: 1 / -1; width: 100%; min-height: 32px; accent-color: #273976; }
+.settings-intro { margin: 0 0 4px; font-size: 11px; line-height: 15px; color: #7b8db8; }
+.settings-section-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.settings-section-head h3 { margin: 0; }
+.settings-reset {
+  min-height: 30px; min-width: 30px; padding: 3px 9px; border-radius: 999px;
+  background: #edf2ff; color: #566eb0; font-size: 12px; font-weight: 800;
+}
+.settings-reset-group { font-size: 11px; font-weight: 700; }
+.settings-label { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.settings-value { color: #566eb0; font-variant-numeric: tabular-nums; }
+.settings-toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; }
+.settings-toggle { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 700; color: #586b9e; }
+.settings-toggle input { width: 18px; height: 18px; accent-color: #273976; }
+.settings-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.settings-chips .settings-chip { min-height: 32px; padding: 4px 10px; font-size: 12px; }
+.settings-footer { margin-top: 14px; padding-top: 10px; border-top: 1px solid #d9e2f7; }
+.settings-footer p { margin: 6px 0 0; font-size: 10px; line-height: 14px; color: #8a9ac0; }
+.settings-default { background: #273976; color: #fffefc; }
 
 body.reduced-motion #bubble, body.reduced-motion .bubble-panel, body.reduced-motion .thought-dot,
 body.reduced-motion #pet, body.reduced-motion #pet-image, body.reduced-motion #speech-anchor,
@@ -125,9 +178,45 @@ body.reduced-motion #mascot, body.reduced-motion .settings-panel { transition: n
 body.reduced-motion.pressing #pet-image { transform: none; }
 body.reduced-motion.pressing #speech-anchor { transform: none; }
 body.reduced-motion #refresh { animation: none; }
+body.reduced-motion .session-state[data-state="busy"] .session-dot { animation: none; }
 @media (prefers-reduced-motion: reduce) {
   #bubble, .bubble-panel, .thought-dot, #pet, #pet-image, #speech-anchor, #mascot, .settings-panel { transition: none !important; }
   body.pressing #pet-image { transform: none; }
   body.pressing #speech-anchor { transform: none; }
   #refresh { animation: none; }
+  .session-state[data-state="busy"] .session-dot { animation: none; }
+}
+
+/* Windows forced-colors / high-contrast mode: use system colors and real
+   borders, not just recolored variables. Skin artwork keeps its own pixels
+   (forced-color-adjust:none) because the app cannot recolor imported images;
+   text panels and controls remain legible regardless of the skin. */
+@media (forced-colors: active) {
+  #bubble, .settings-panel, .session-state, .session-toast, .other-row {
+    background: Canvas; color: CanvasText; border-color: CanvasText;
+  }
+  #bubble, .settings-panel { border: 4px solid CanvasText; }
+  .session-state, .session-toast, .dot-one, .dot-two { border: 3px solid CanvasText; }
+  .thought-dot { background: Canvas; border-color: CanvasText; }
+  button, .settings-chip, .settings-size-btn, .settings-action, .settings-reset {
+    background: ButtonFace; color: ButtonText; border: 2px solid ButtonText;
+  }
+  .settings-chip.is-active, .settings-size-btn.is-active, .settings-default {
+    background: Highlight; color: HighlightText; border-color: Highlight;
+  }
+  button:focus-visible, input:focus-visible, #bubble:focus-visible {
+    outline: 3px solid Highlight; outline-offset: 3px;
+  }
+  .status-dot, .session-dot { background: CanvasText; border: 1px solid CanvasText; forced-color-adjust: none; }
+  #pet-image { forced-color-adjust: none; }
+  input[type="range"] { accent-color: Highlight; forced-color-adjust: none; }
+}
+
+@media (prefers-contrast: more) {
+  #bubble { border-width: 6px; }
+  .settings-panel { border-width: 5px; }
+  .settings-chip, .settings-size-btn, .settings-action, .settings-reset { border: 2px solid #273976; }
+  .settings-intro, .settings-hint, .settings-footer p { color: #43547f; }
+  #period, .other-row, #updated { color: #3f528c; }
+  button:focus-visible, input:focus-visible, #bubble:focus-visible { outline-width: 4px; }
 }
