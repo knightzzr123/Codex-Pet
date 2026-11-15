@@ -79,6 +79,6 @@ python tools/package.py --original "完整安装包.zip" --output "..\大肥鱼-
 
 仓库保留源码、资源、测试和第三方许可证。运行时、安装包、用户数据和诊断文件由 `.gitignore` 排除；完整安装包作为 GitHub Releases 附件发布。
 
-P1 实现说明与验证记录见 [docs/P1-NOTES.md](docs/P1-NOTES.md)。
+P1 实现说明与验证记录见 [docs/P1-NOTES.md](大肥鱼/docs/P1-NOTES.md)。
 
-第三方组件说明见 [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt)，许可证保存在 `licenses/` 和 `tools/7zip/`。
+第三方组件说明见 [THIRD-PARTY-NOTICES.txt](大肥鱼/THIRD-PARTY-NOTICES.txt)，许可证保存在 `大肥鱼/licenses/` 和 `大肥鱼/tools/7zip/`。

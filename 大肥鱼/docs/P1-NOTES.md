@@ -81,7 +81,7 @@ Windows GUI、真实安装器、Codex marketplace/MCP 和 95MB runtime 的端到
 
 ## 测试结果（本机 Linux，2026-11-16）
 
-- `cd 大肥鱼 && npm test`：**105 pass / 0 fail**（含新增 session/settings/diagnose-repair/release-check 测试）。
+- `cd 大肥鱼 && npm test`：**106 pass / 0 fail**（含新增 session/settings/diagnose-repair/release-check 测试）。
 - `npm run release-check`：exit 0，install/uninstall/upgrade 均为 PASS。
 - `npm run diagnose`：只读，exit 0（源码树；源码树无 runtime 为正常警告）。
 - `env -u GIT_CONFIG_COUNT -u GIT_CONFIG_VALUE_0 python3 -m unittest test/test_package_type.py -v`：8 pass / 0 fail（未改 Python 打包逻辑；本环境 shell 的 git 配置缺键，需去掉这两个变量）。

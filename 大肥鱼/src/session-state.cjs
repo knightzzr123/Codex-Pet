@@ -36,7 +36,7 @@ function createSessionStateTracker({
     state: 'idle', channel: 'unavailable', degraded: true, since: startedAt,
     updatedAt: startedAt, toastId: 0, activityAt: 0, errorAt: 0, reason: 'probe-unavailable'
   };
-  let lastToastAt = 0;
+  let lastToastAt = -Infinity;
 
   function sample() {
     const at = now();

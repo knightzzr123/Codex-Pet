@@ -51,6 +51,13 @@ test('忙碌超时回落空闲；报错优先于忙碌但会被后续活动覆�
   assert.equal(tracker.snapshot().state, 'busy');
 });
 
+test('首次报错即使时钟很小也触发一次气泡', () => {
+  const tracker = createSessionStateTracker({ now: () => 1000,
+    probe: () => ({ state: 'error', channel: 'logs-sqlite', errorAt: 900 }) });
+  tracker.sample();
+  assert.ok(tracker.snapshot().toastId >= 1);
+});
+
 test('报错气泡节流：首次出现一次，持续报错不会每 5 秒重复', () => {
   let now = 100000;
   const tracker = createSessionStateTracker({ now: () => now,
