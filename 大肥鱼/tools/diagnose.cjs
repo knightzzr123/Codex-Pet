@@ -48,6 +48,7 @@ function inspectMcpRegistration(codexPath, options = {}) {
   try {
     const output = run(codexPath, ['mcp', 'list', '--json'], {
       encoding: 'utf8', timeout: options.timeoutMs || 8000, windowsHide: true,
+      shell: /\.(cmd|bat)$/i.test(String(codexPath)),
       env: { ...(options.env || process.env), DAFEIYU_NO_LAUNCH: '1' }
     });
     const servers = normalizeMcpServers(JSON.parse(String(output).replace(/^\uFEFF/, '')));
@@ -105,7 +106,7 @@ function buildReport(root, options = {}) {
     if (exists(file) && fs.statSync(file).isFile()) report.artifacts.push({ path: file, sha256: hashFile(file) });
   }
   const codexPath = options.codexPath || (options.findCodex || findCodex)(env, options.platform || process.platform);
-  report.codex = codexPath ? { status: 'found', path: codexPath, inspection: '未执行命令；未读取或更改配置' } : { status: 'not-found', inspection: '未找到/跳过；未执行命令' };
+  report.codex = codexPath ? { status: 'found', path: codexPath, inspection: '仅只读查询 MCP 登记；未修改配置' } : { status: 'not-found', inspection: '未找到/跳过；未执行命令' };
   if (codexPath && options.inspectMcp !== false) {
     try {
       const inspect = options.inspectMcp || inspectMcpRegistration;
@@ -175,23 +176,28 @@ function buildRepairPlan(report, options = {}) {
   const actions = [];
   const markerPath = path.join(root, 'PACKAGE-TYPE.json');
   const markerExists = exists(markerPath);
+  const runtimeDir = path.join(root, 'runtime');
+  const archive = path.join(root, 'runtime.7z');
+  const extractor = path.join(root, 'tools', '7zip', '7zr.exe');
   const missingFiles = report.errors.filter(message => message.startsWith('缺少必需文件：')).map(message => message.slice('缺少必需文件：'.length));
-  const markerBroken = report.errors.some(message => /PACKAGE-TYPE\.json/.test(message));
+  const markerBroken = report.errors.some(message => /PACKAGE-TYPE\.json|类型标记/.test(message));
   if (missingFiles.length) {
     actions.push({ id: 'install', title: '安装文件', status: 'blocked',
       reason: `缺少 ${missingFiles.join('、')}；请重新解压完整安装包，诊断不会伪造缺失文件` });
   } else if (markerBroken) {
-    actions.push({ id: 'install', title: '安装类型标记', status: 'blocked', reason: 'PACKAGE-TYPE.json 已损坏，需重新解压或手动检查' });
+    actions.push({ id: 'install', title: '安装类型标记', status: 'blocked', reason: 'PACKAGE-TYPE.json 已损坏或与 runtime 资产冲突，需重新解压或手动检查' });
   } else if (!markerExists) {
-    actions.push({ id: 'install', title: '安装类型标记', status: 'available',
-      reason: '补写 PACKAGE-TYPE.json（源码包或已校验的完整包）', apply: 'write-marker' });
+    if (exists(runtimeDir) && !exists(archive)) {
+      actions.push({ id: 'install', title: '安装类型标记', status: 'blocked', reason: '存在 runtime/ 但缺少 runtime.7z，无法判断包类型，请重新解压完整包' });
+    } else if (exists(archive)) {
+      actions.push({ id: 'install', title: '安装类型标记', status: 'available',
+        reason: '补写已校验完整包的 PACKAGE-TYPE.json', apply: 'write-marker' });
+    } else {
+      actions.push({ id: 'install', title: '安装文件', status: 'ok', reason: '源码树通常不带 PACKAGE-TYPE.json，无需修复' });
+    }
   } else {
     actions.push({ id: 'install', title: '安装文件', status: 'ok', reason: '必需文件与类型标记完整' });
   }
-
-  const runtimeDir = path.join(root, 'runtime');
-  const archive = path.join(root, 'runtime.7z');
-  const extractor = path.join(root, 'tools', '7zip', '7zr.exe');
   const complete = report.checks.packageType === 'complete';
   if (!complete) {
     actions.push({ id: 'runtime', title: '运行时', status: 'ok', reason: '源码树，无需展开 runtime' });
@@ -233,6 +239,9 @@ function defaultExtractRuntime(root) {
   const extractor = path.join(root, 'tools', '7zip', '7zr.exe');
   const archive = path.join(root, 'runtime.7z');
   const runtimeDir = path.join(root, 'runtime');
+  const manifest = readJson(path.join(root, 'runtime-manifest.json'));
+  if (hashFile(extractor) !== manifest.extractorSha256) throw new Error('7zr.exe 校验失败，拒绝执行解包');
+  if (hashFile(archive) !== manifest.sha256) throw new Error('runtime.7z 校验失败，拒绝执行解包');
   const stage = path.join(root, `.diagnose-runtime-${process.pid}-${Date.now()}`);
   fs.mkdirSync(stage, { recursive: true });
   try {

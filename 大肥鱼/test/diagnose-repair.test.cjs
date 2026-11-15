@@ -22,12 +22,10 @@ function fixture({ complete = false, withRuntime = false, marker = 'source' } = 
     fs.mkdirSync(path.join(root, 'runtime'), { recursive: true });
     fs.writeFileSync(path.join(root, 'runtime', 'electron.exe'), 'fixture');
   }
-  if (complete) {
-    fs.writeFileSync(path.join(root, 'PACKAGE-TYPE.json'), JSON.stringify({
+  if (marker !== null) {
+    fs.writeFileSync(path.join(root, 'PACKAGE-TYPE.json'), JSON.stringify(complete ? {
       packageType: 'complete', installable: true, version: '3.3.1', runtimeBytes: manifest.bytes, runtimeSha256: manifest.sha256
-    }));
-  } else if (marker !== null) {
-    fs.writeFileSync(path.join(root, 'PACKAGE-TYPE.json'), JSON.stringify({ packageType: marker, installable: false }));
+    } : { packageType: marker, installable: false }));
   }
   return root;
 }
@@ -59,8 +57,8 @@ test('修复计划区分安装、运行时和 MCP；缺失文件不会伪造', (
   assert.equal(completePlan.actions.find(action => action.id === 'mcp').status, 'available');
 });
 
-test('源码树缺类型标记可补写；写入后计划变为无需修复', async () => {
-  const root = fixture({ marker: null });
+test('完整包缺类型标记可补写；写入后计划变为无需修复', async () => {
+  const root = fixture({ complete: true, marker: null });
   const before = inspect(root);
   const plan = buildRepairPlan(before);
   const install = plan.actions.find(action => action.id === 'install');
@@ -69,15 +67,15 @@ test('源码树缺类型标记可补写；写入后计划变为无需修复', as
   const result = await applyRepairPlan(plan, { yes: true, root, logFile });
   assert.equal(result.ok, true);
   const marker = JSON.parse(fs.readFileSync(path.join(root, 'PACKAGE-TYPE.json'), 'utf8'));
-  assert.equal(marker.packageType, 'source');
-  assert.equal(marker.installable, false);
+  assert.equal(marker.packageType, 'complete');
+  assert.equal(marker.installable, true);
   assert.match(fs.readFileSync(logFile, 'utf8'), /\[ok\] install/);
   const again = buildRepairPlan(inspect(root));
   assert.equal(again.available.length, 0);
 });
 
 test('显式确认缺失时不做任何修改', async () => {
-  const root = fixture({ marker: null });
+  const root = fixture({ complete: true, marker: null });
   const plan = buildRepairPlan(inspect(root));
   const result = await applyRepairPlan(plan, { yes: false, interactive: false, root, logFile: path.join(root, 'work', 'nope.log') });
   assert.equal(result.ok, false);

@@ -120,6 +120,7 @@ else {
   }
   function startSessionProbe() {
     if (sessionInterval || !sessionTracker) return;
+    writeSessionStatus(sessionTracker.snapshot());
     sessionTracker.sample();
     sessionInterval = setInterval(() => { sessionTracker?.sample(); }, 5000);
   }
