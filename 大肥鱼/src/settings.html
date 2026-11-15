@@ -35,6 +35,23 @@
           </div>
           <h3 class="settings-kicker-title">皮肤</h3>
           <div id="settings-skins" class="settings-skin-grid" role="radiogroup" aria-label="角色皮肤"></div>
+          <div id="settings-zip-drop" class="settings-drop" data-state="idle" tabindex="0" role="button" aria-label="将 .zip 或皮肤包文件夹拖到此处">
+            <strong id="settings-drop-title">将 .zip 或皮肤包文件夹拖到此处</strong>
+            <span id="settings-drop-detail">一次一个。也可以选择文件。</span>
+            <button type="button" id="settings-import-zip" class="settings-action settings-primary">选择文件…</button>
+            <button type="button" id="settings-import-pack" class="settings-link">选择文件夹…</button>
+            <button type="button" id="settings-import-skin" class="settings-link">导入图片…</button>
+          </div>
+          <section id="settings-zip-preview" class="settings-card settings-preview" hidden aria-live="polite" aria-label="皮肤包导入预览">
+            <h3 id="settings-zip-preview-title">导入预览</h3>
+            <p id="settings-zip-preview-summary"></p>
+            <div id="settings-zip-preview-characters" class="settings-row"></div>
+            <p id="settings-zip-preview-warning" class="settings-warning" hidden></p>
+            <div class="settings-actions">
+              <button type="button" id="settings-zip-confirm" class="settings-action settings-primary">导入</button>
+              <button type="button" id="settings-zip-cancel" class="settings-action">取消</button>
+            </div>
+          </section>
           <p class="settings-hint">高对比主题下预览图可能保持原色。</p>
           <button type="button" id="settings-delete-skin" class="settings-action settings-link" hidden>删除当前已导入的皮肤</button>
           <h3 class="settings-kicker-title">透明度</h3>
@@ -59,24 +76,6 @@
             <button type="button" class="settings-chip" role="radio" data-color-scheme="light" aria-checked="false">浅色</button>
             <button type="button" class="settings-chip" role="radio" data-color-scheme="dark" aria-checked="false">深色</button>
           </div>
-          <h3 class="settings-kicker-title">导入</h3>
-          <div id="settings-zip-drop" class="settings-drop" data-state="idle" tabindex="0" role="button" aria-label="将 .zip 或皮肤包文件夹拖到此处">
-            <strong id="settings-drop-title">将 .zip 或皮肤包文件夹拖到此处</strong>
-            <span id="settings-drop-detail">一次一个。也可以选择文件。</span>
-            <button type="button" id="settings-import-zip" class="settings-action settings-primary">选择文件…</button>
-            <button type="button" id="settings-import-pack" class="settings-link">选择文件夹…</button>
-            <button type="button" id="settings-import-skin" class="settings-link">导入图片…</button>
-          </div>
-          <section id="settings-zip-preview" class="settings-card settings-preview" hidden aria-live="polite" aria-label="皮肤包导入预览">
-            <h3 id="settings-zip-preview-title">导入预览</h3>
-            <p id="settings-zip-preview-summary"></p>
-            <div id="settings-zip-preview-characters" class="settings-row"></div>
-            <p id="settings-zip-preview-warning" class="settings-warning" hidden></p>
-            <div class="settings-actions">
-              <button type="button" id="settings-zip-confirm" class="settings-action settings-primary">导入</button>
-              <button type="button" id="settings-zip-cancel" class="settings-action">取消</button>
-            </div>
-          </section>
         </section>
 
         <section class="settings-panel-page" role="tabpanel" id="panel-dialogue" aria-labelledby="tab-dialogue" data-settings-group="dialogue" hidden>

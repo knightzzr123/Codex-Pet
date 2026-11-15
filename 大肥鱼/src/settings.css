@@ -129,7 +129,7 @@ button { cursor: pointer; }
   border: 1px solid transparent; border-radius: var(--radius-sm); background: transparent; color: var(--text);
 }
 .settings-tab[aria-selected="true"] { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
-.settings-content { overflow: auto; padding: var(--space-5); }
+.settings-content { overflow: auto; padding: var(--space-5) var(--space-5) var(--space-6); }
 .settings-panel-page h2 { margin: 0; font-size: 18px; }
 .settings-section-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); margin-bottom: var(--space-3); }
 .settings-card, .settings-drop, .settings-preview {
@@ -151,11 +151,20 @@ button { cursor: pointer; }
 .settings-chip-thumb { width: 28px; height: 28px; border-radius: 8px; object-fit: cover; background: var(--bg); }
 .settings-chip.is-active, .settings-size-btn.is-active { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
 .settings-drop {
-  margin-top: var(--space-3);
-  display: flex; flex-direction: column; gap: var(--space-1);
-  border-style: dashed; color: var(--muted); min-height: 88px; justify-content: center;
+  margin-top: var(--space-4);
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-3);
+  border-style: dashed; color: var(--muted); min-height: 56px; padding: 8px 12px;
 }
-.settings-drop strong { color: var(--text); }
+.settings-drop strong { color: var(--text); flex: 0 1 auto; }
+.settings-drop > span { flex: 1 1 160px; min-width: 0; }
+.settings-drop .settings-action { min-height: 32px; padding: 4px 12px; }
+.settings-drop .settings-link { min-height: 32px; padding: 4px 8px; }
+/* Only the idle state is a single compact row; drag, error and success states
+   expand so the longer status text and actions stay readable. */
+.settings-drop[data-state="hover"], .settings-drop[data-state="illegal"],
+.settings-drop[data-state="error"], .settings-drop[data-state="success"] {
+  flex-direction: column; align-items: flex-start; justify-content: center; min-height: 88px;
+}
 .settings-drop.is-drag { border-color: var(--accent); color: var(--text); }
 .settings-preview { margin-top: var(--space-3); }
 .settings-preview h3 { margin: 0 0 var(--space-2); font-size: 15px; }
@@ -190,18 +199,37 @@ button { cursor: pointer; }
 .settings-version { margin: 0; font-size: 20px; font-weight: 800; }
 .settings-code { font-family: var(--mono); font-size: 12px; }
 .settings-footer { margin-top: var(--space-4); }
+.settings-reset[data-reset-key] {
+  width: 32px; height: 32px; min-width: 32px; min-height: 32px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center; line-height: 1;
+}
 button:focus-visible, input:focus-visible, .settings-drop:focus-visible {
   outline: 3px solid var(--focus); outline-offset: 3px;
 }
-.settings-kicker-title { margin: var(--space-6) 0 var(--space-2); font-size: 16px; }
+.settings-kicker-title { margin: var(--space-4) 0 var(--space-2); font-size: 16px; }
 .settings-skin-grid { display: flex; flex-wrap: wrap; gap: var(--space-3); }
+.settings-size { display: flex; flex-wrap: wrap; gap: 6px; margin-top: var(--space-2); }
+.settings-size-btn {
+  width: 32px; height: 32px; min-width: 32px; min-height: 32px; padding: 0;
+  font-size: 13px; display: inline-flex; align-items: center; justify-content: center;
+}
 .settings-skin-card {
-  width: 108px; min-height: 96px; padding: var(--space-2); border-radius: 12px;
-  border: 2px solid var(--line); background: var(--bg-elevated); display: flex; flex-direction: column; align-items: center; gap: 6px;
+  width: 112px; min-height: 0; padding: 8px; gap: 4px; position: relative;
+  border-radius: 12px; border: 2px solid var(--line); background: var(--bg-elevated);
+  display: flex; flex-direction: column; align-items: center;
 }
 .settings-skin-card.is-active { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
-.settings-skin-card.is-active::after { content: "✓"; font-weight: 800; }
-.settings-skin-card img, .settings-chip-thumb { width: 72px; height: 72px; object-fit: contain; border-radius: 8px; background: var(--chip); }
+.settings-skin-card.is-active::after {
+  content: "✓"; position: absolute; top: 4px; right: 6px; font-size: 12px; line-height: 1;
+}
+.settings-skin-card img { width: 56px; height: 56px; object-fit: contain; border-radius: 8px; background: var(--chip); }
+.settings-skin-name {
+  word-break: keep-all; overflow-wrap: anywhere; text-align: center;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  line-height: 1.3;
+}
+.settings-skin-origin { font-size: 11px; color: var(--muted); line-height: 1.2; }
+.settings-chip-thumb { width: 72px; height: 72px; object-fit: contain; border-radius: 8px; background: var(--chip); }
 .settings-link { background: transparent; border: 0; color: var(--focus); text-decoration: underline; min-height: 32px; }
 .settings-drop[data-state="illegal"] { background: var(--color-danger-bg); border-color: var(--color-danger); color: var(--color-danger); }
 .settings-drop[data-state="busy"] { opacity: .7; }
