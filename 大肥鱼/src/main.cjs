@@ -383,6 +383,63 @@ else {
       return false;
     } finally { deletingSkin = false; }
   }
+  async function applyPreferencesSettings(settings = {}) {
+    if (settings.sizeLevel !== undefined && settings.sizeLevel !== preferences.sizeLevel) {
+      await setSizeLevel(settings.sizeLevel);
+    }
+    const experience = {};
+    for (const key of EXPERIENCE_KEYS) if (Object.hasOwn(settings, key)) experience[key] = settings[key];
+    if (Object.keys(experience).length) setExperiences(experience);
+    if (typeof settings.skinId === 'string' && settings.skinId && settings.skinId !== state.skin.id) {
+      setSkin(settings.skinId);
+    }
+    savePreferences({ immediate: true });
+  }
+  async function exportPreferences() {
+    cancelDrag();
+    try {
+      const result = await dialog.showSaveDialog(win, {
+        title: '导出偏好', defaultPath: PREFERENCES_FILE_NAME,
+        filters: [{ name: '大肥鱼偏好', extensions: ['json'] }]
+      });
+      if (result.canceled || !result.filePath) return false;
+      const bundle = buildPreferencesBundle(preferences, listSkins());
+      writeJsonAtomic(result.filePath, bundle);
+      await dialog.showMessageBox(win, {
+        type: 'info', title: '偏好已导出', message: '已导出设置与皮肤清单',
+        detail: '文件不包含任何图片、缩略图、本地路径或自定义台词。'
+      });
+      return true;
+    } catch (error) {
+      await dialog.showMessageBox(win, { type: 'error', title: '无法导出偏好',
+        message: '偏好导出失败', detail: error.code ? '无法写入所选位置，请换一个文件夹或检查权限。' : error.message });
+      return false;
+    }
+  }
+  async function importPreferences() {
+    cancelDrag();
+    try {
+      const result = await dialog.showOpenDialog(win, {
+        title: '导入偏好', properties: ['openFile'],
+        filters: [{ name: '大肥鱼偏好', extensions: ['json'] }]
+      });
+      if (result.canceled || !result.filePaths[0]) return false;
+      const file = result.filePaths[0];
+      const stat = fs.statSync(file);
+      if (!stat.isFile() || stat.size > PREFERENCES_FILE_MAX_BYTES) throw new Error('偏好文件过大。');
+      const parsed = parsePreferencesBundle(fs.readFileSync(file, 'utf8'), { catalog: listSkins() });
+      await applyPreferencesSettings(parsed.settings);
+      await dialog.showMessageBox(win, {
+        type: 'info', title: '偏好已导入', message: '设置与皮肤选择已应用',
+        detail: ['未包含图片或台词；本机缺失的皮肤会回退到默认角色。', ...parsed.warnings].join('\n')
+      });
+      return true;
+    } catch (error) {
+      await dialog.showMessageBox(win, { type: 'error', title: '无法导入偏好',
+        message: '偏好导入失败', detail: error.code ? '无法读取所选文件，请确认文件存在且可读。' : error.message });
+      return false;
+    }
+  }
   async function chooseDialogueEditor() {
     if (editingDialogues || importingSkin || deletingSkin) return;
     editingDialogues = true; cancelDrag();
