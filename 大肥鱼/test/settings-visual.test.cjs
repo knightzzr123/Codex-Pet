@@ -108,7 +108,13 @@ function fixture() {
     append(...children) { this.children.push(...children); }
     setAttribute(name, value) { this.attrs.set(name, String(value)); }
     getAttribute(name) { return this.attrs.get(name) ?? null; }
-    querySelectorAll() { return this.focusables; }
+    querySelectorAll(selector) {
+      if (selector.startsWith('.')) {
+        const name = selector.slice(1);
+        return this.children.filter(child => String(child.className).split(' ').includes(name));
+      }
+      return this.focusables;
+    }
     focus() { this.focused = true; doc.activeElement = this; }
   }
   const get = id => {
@@ -173,4 +179,35 @@ test('V2 卡片主行只放名称，来源进小号副行，完整名留在 titl
   assert.equal(cards[1].children[0].getAttribute('aria-hidden'), 'true');
   assert.match(script, /const name = document\.createElement\('span'\);\s*name\.className = 'settings-skin-name';/);
   assert.match(script, /name\.textContent = skin\.name;/);
+});
+
+test('V3 删除重复区块标题，控件行用 label/for 与 radiogroup 关联', () => {
+  for (const title of ['>透明度<', '>大小<']) {
+    assert.equal(html.split(title).length - 1, 1, `${title} appears once in the control row only`);
+  }
+  assert.doesNotMatch(html, /settings-kicker-title">透明度</);
+  assert.doesNotMatch(html, /settings-kicker-title">大小</);
+  assert.match(html, /<label class="settings-label" for="settings-opacity">透明度<\/label>/);
+  assert.match(html, /<span class="settings-label" id="settings-size-label">大小<\/span>/);
+  assert.match(html, /id="settings-size" class="settings-size" role="radiogroup" aria-labelledby="settings-size-label"/);
+
+  const field = block(css, '.settings-field {');
+  assert.match(field, /display: grid/);
+  assert.match(field, /grid-template-columns: auto auto 1fr/);
+  assert.match(field, /align-items: center/);
+  assert.match(field, /gap: var\(--space-1\) var\(--space-2\)/);
+  assert.match(block(css, '.settings-field .settings-value'), /justify-self: end/);
+
+  // Size radios keep role=radio + aria-checked, driven from settings.js.
+  const f = fixture();
+  f.applyState({ sizeLevel: 7, skin: { id: 'default', name: '默认 · 鲸鱼娘', kind: 'builtin' }, skins: [], experience: {} });
+  const radios = f.get('settings-size').children;
+  assert.equal(radios.length, 10);
+  for (const radio of radios) {
+    assert.equal(radio.getAttribute('role'), 'radio');
+    assert.match(radio.getAttribute('aria-label'), /大小 \d+ 档/);
+    assert.equal(radio.getAttribute('aria-checked'), String(radio.getAttribute('data-level') === '7'));
+  }
+  assert.match(script, /button\.setAttribute\('role', 'radio'\)/);
+  assert.match(script, /button\.setAttribute\('aria-checked', String\(active\)\)/);
 });

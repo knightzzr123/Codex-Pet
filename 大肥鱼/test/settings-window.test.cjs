@@ -194,7 +194,8 @@ test('HTML 有六个分类、读屏名称、拖拽区和导入前预览', () => 
   assert.match(html, /id="settings-zip-preview"/);
   assert.match(html, /id="settings-close"[^>]*aria-label="关闭设置"/);
   for (const id of ['settings-bubble-x', 'settings-bubble-y', 'settings-idle', 'settings-opacity']) {
-    assert.match(html, new RegExp(`id="${id}"[^>]*aria-label=`), id);
+    assert.match(html, new RegExp(`<label[^>]*for="${id}"`), id);
+    assert.match(html, new RegExp(`id="${id}"[^>]*type="range"`), id);
   }
   const css = fs.readFileSync(path.join(root, 'src', 'settings.css'), 'utf8');
   assert.match(css, /\[hidden\] \{ display: none !important; \}/);

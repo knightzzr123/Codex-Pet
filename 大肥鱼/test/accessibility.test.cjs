@@ -109,7 +109,8 @@ test('设置对话框的读屏名称和焦点循环在独立设置窗口里', ()
   assert.match(html, /aria-describedby="settings-intro"/);
   assert.match(html, /id="settings-title"/);
   for (const id of ['settings-bubble-x', 'settings-bubble-y', 'settings-idle', 'settings-opacity']) {
-    assert.match(html, new RegExp(`id="${id}"[^>]*aria-label=`), id);
+    assert.match(html, new RegExp(`<label[^>]*for="${id}"`), id);
+    assert.match(html, new RegExp(`id="${id}"[^>]*type="range"`), id);
   }
   assert.match(html, /id="settings-skins"[^>]*role="radiogroup"/);
   assert.match(html, /aria-checked="true"[^>]*data-bubble-seconds="8"/);

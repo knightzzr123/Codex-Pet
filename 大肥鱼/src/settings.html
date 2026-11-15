@@ -54,22 +54,18 @@
           </section>
           <p class="settings-hint">高对比主题下预览图可能保持原色。</p>
           <button type="button" id="settings-delete-skin" class="settings-action settings-link" hidden>删除当前已导入的皮肤</button>
-          <h3 class="settings-kicker-title">透明度</h3>
           <div class="settings-field">
-            <span class="settings-label">透明度
-              <button type="button" class="settings-reset" data-reset-key="opacity" aria-label="重置透明度" title="恢复默认透明度">↺</button>
-            </span>
+            <label class="settings-label" for="settings-opacity">透明度</label>
             <span id="settings-opacity-value" class="settings-value">100%</span>
-            <input id="settings-opacity" type="range" min="0.35" max="1" step="0.05" value="1" aria-label="角色透明度">
+            <button type="button" class="settings-reset" data-reset-key="opacity" aria-label="重置透明度" title="恢复默认透明度">↺</button>
+            <input id="settings-opacity" type="range" min="0.35" max="1" step="0.05" value="1">
           </div>
-          <h3 class="settings-kicker-title">大小</h3>
           <div class="settings-field settings-field-plain">
-            <span class="settings-label">大小
-              <button type="button" class="settings-reset" data-reset-key="sizeLevel" aria-label="重置大小">↺</button>
-            </span>
+            <span class="settings-label" id="settings-size-label">大小</span>
             <span id="settings-size-value" class="settings-value">4 档</span>
+            <button type="button" class="settings-reset" data-reset-key="sizeLevel" aria-label="重置大小" title="恢复默认大小">↺</button>
           </div>
-          <div id="settings-size" class="settings-size" role="radiogroup" aria-label="角色大小"></div>
+          <div id="settings-size" class="settings-size" role="radiogroup" aria-labelledby="settings-size-label"></div>
           <h3 class="settings-kicker-title">窗口外观</h3>
           <div id="settings-color-scheme" class="settings-chips" role="radiogroup" aria-label="窗口外观">
             <button type="button" class="settings-chip" role="radio" data-color-scheme="system" aria-checked="true">跟随系统</button>
@@ -107,12 +103,11 @@
               </div>
             </div>
             <div class="settings-field settings-field-plain">
-              <span class="settings-label">气泡停留
-                <button type="button" class="settings-reset" data-reset-key="bubbleSeconds" aria-label="重置气泡停留">↺</button>
-              </span>
+              <span class="settings-label" id="settings-bubble-seconds-label">气泡停留</span>
               <span id="settings-bubble-seconds-value" class="settings-value">8 秒</span>
+              <button type="button" class="settings-reset" data-reset-key="bubbleSeconds" aria-label="重置气泡停留">↺</button>
             </div>
-            <div id="settings-bubble-seconds" class="settings-chips" role="radiogroup" aria-label="气泡停留时间">
+            <div id="settings-bubble-seconds" class="settings-chips" role="radiogroup" aria-labelledby="settings-bubble-seconds-label">
               <button type="button" class="settings-chip" role="radio" aria-checked="false" data-bubble-seconds="5">5 秒</button>
               <button type="button" class="settings-chip" role="radio" aria-checked="true" data-bubble-seconds="8">8 秒</button>
               <button type="button" class="settings-chip" role="radio" aria-checked="false" data-bubble-seconds="15">15 秒</button>
@@ -123,18 +118,16 @@
               <button type="button" class="settings-reset" data-reset-key="advanceOnPetTap" aria-label="重置点人物继续对话">↺</button>
             </div>
             <div class="settings-field">
-              <span class="settings-label">气泡偏移 X
-                <button type="button" class="settings-reset" data-reset-key="bubbleOffsetX" aria-label="重置气泡偏移 X">↺</button>
-              </span>
+              <label class="settings-label" for="settings-bubble-x">气泡偏移 X</label>
               <span id="settings-bubble-x-value" class="settings-value">0</span>
-              <input id="settings-bubble-x" type="range" min="-48" max="48" step="1" value="0" aria-label="气泡水平偏移">
+              <button type="button" class="settings-reset" data-reset-key="bubbleOffsetX" aria-label="重置气泡偏移 X">↺</button>
+              <input id="settings-bubble-x" type="range" min="-48" max="48" step="1" value="0">
             </div>
             <div class="settings-field">
-              <span class="settings-label">气泡偏移 Y
-                <button type="button" class="settings-reset" data-reset-key="bubbleOffsetY" aria-label="重置气泡偏移 Y">↺</button>
-              </span>
+              <label class="settings-label" for="settings-bubble-y">气泡偏移 Y</label>
               <span id="settings-bubble-y-value" class="settings-value">0</span>
-              <input id="settings-bubble-y" type="range" min="-48" max="48" step="1" value="0" aria-label="气泡垂直偏移">
+              <button type="button" class="settings-reset" data-reset-key="bubbleOffsetY" aria-label="重置气泡偏移 Y">↺</button>
+              <input id="settings-bubble-y" type="range" min="-48" max="48" step="1" value="0">
             </div>
           </div>
         </section>
@@ -146,11 +139,10 @@
           </div>
           <div class="settings-card">
             <div class="settings-field">
-              <span class="settings-label">闲置动作间隔（秒）
-                <button type="button" class="settings-reset" data-reset-key="idleIntervalSec" aria-label="重置闲置动作间隔">↺</button>
-              </span>
+              <label class="settings-label" for="settings-idle">闲置动作间隔（秒）</label>
               <span id="settings-idle-value" class="settings-value">45</span>
-              <input id="settings-idle" type="range" min="5" max="300" step="5" value="45" aria-label="闲置动作间隔秒数">
+              <button type="button" class="settings-reset" data-reset-key="idleIntervalSec" aria-label="重置闲置动作间隔">↺</button>
+              <input id="settings-idle" type="range" min="5" max="300" step="5" value="45">
             </div>
             <div class="settings-toggle-row">
               <label class="settings-switch" for="settings-mirror"><input id="settings-mirror" type="checkbox" checked> <span class="settings-switch-ui" aria-hidden="true"></span> 贴左侧时转向</label>
