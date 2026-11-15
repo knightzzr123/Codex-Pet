@@ -198,7 +198,7 @@ function findManifestDirectory(root) {
       try { childStat = fs.lstatSync(childPath); } catch { continue; }
       if (!childStat.isDirectory()) continue;
       if (fs.existsSync(path.join(childPath, 'manifest.json'))) {
-        const error = new Error('皮肤包里的文件只能放在根目录，或唯一一层顶层目录下。manifest.json 也只能在这两个位置。');
+        const error = new Error('manifest.json 只能放在皮肤包根目录，或唯一一层顶层目录下；图片可按 manifest 的相对路径放在子目录里。');
         error.code = 'ZIP_MANIFEST_LOCATION';
         throw error;
       }

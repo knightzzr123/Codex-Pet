@@ -224,7 +224,7 @@ function locatePackManifest(entries) {
   }
   const prefix = manifests[0].parts.slice(0, -1);
   if (prefix.length > 1) {
-    throw new ZipError('皮肤包里的文件只能放在根目录，或唯一一层顶层目录下。manifest.json 也只能在这两个位置。', 'ZIP_MANIFEST_LOCATION');
+    throw new ZipError('manifest.json 只能放在皮肤包根目录，或唯一一层顶层目录下；图片可按 manifest 的相对路径放在子目录里。', 'ZIP_MANIFEST_LOCATION');
   }
   return { entry: manifests[0], prefix };
 }
