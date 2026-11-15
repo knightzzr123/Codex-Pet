@@ -12,7 +12,7 @@ function fixture({ complete = false, withRuntime = false, marker = 'source' } = 
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dafeiyu-repair-'));
   for (const file of ['plugin.json', '.codex-plugin/plugin.json', 'package.json', 'prepare-runtime.ps1', 'runtime-manifest.json', 'src/plugin-server.cjs', '.agents/plugins/marketplace.json', 'README.md']) {
     const target = path.join(root, file); fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.writeFileSync(target, file.endsWith('.json') ? JSON.stringify({ version: '3.3.1' }) : 'fixture');
+    fs.writeFileSync(target, file.endsWith('.json') ? JSON.stringify({ version: '3.3.2' }) : 'fixture');
   }
   const archive = complete ? Buffer.from('test') : null;
   const manifest = { bytes: archive ? archive.length : 0, sha256: archive ? crypto.createHash('sha256').update(archive).digest('hex') : crypto.createHash('sha256').update('').digest('hex') };
@@ -24,7 +24,7 @@ function fixture({ complete = false, withRuntime = false, marker = 'source' } = 
   }
   if (marker !== null) {
     fs.writeFileSync(path.join(root, 'PACKAGE-TYPE.json'), JSON.stringify(complete ? {
-      packageType: 'complete', installable: true, version: '3.3.1', runtimeBytes: manifest.bytes, runtimeSha256: manifest.sha256
+      packageType: 'complete', installable: true, version: '3.3.2', runtimeBytes: manifest.bytes, runtimeSha256: manifest.sha256
     } : { packageType: marker, installable: false }));
   }
   return root;
@@ -112,7 +112,7 @@ test('完整包缺类型标记时按 manifest 生成 complete 标记；备份文
   const marker = markerPayload(root);
   assert.equal(marker.packageType, 'complete');
   assert.equal(marker.installable, true);
-  assert.equal(marker.version, '3.3.1');
+  assert.equal(marker.version, '3.3.2');
   const source = path.join(root, 'source.txt'); fs.writeFileSync(source, 'backup me');
   const backup = backupFile(source, path.join(root, 'backups'));
   assert.ok(backup && fs.existsSync(backup));

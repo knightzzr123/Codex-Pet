@@ -25,9 +25,9 @@ class PackageTypeTests(unittest.TestCase):
         self.manifest = {'bytes': len(payload), 'sha256': hashlib.sha256(payload).hexdigest()}
         (self.project / 'runtime-manifest.json').write_text(json.dumps(self.manifest), encoding='utf-8')
         for name, value in {
-            'plugin.json': {'version': '3.3.1'},
-            '.codex-plugin/plugin.json': {'version': '3.3.1'},
-            'package.json': {'version': '3.3.1'},
+            'plugin.json': {'version': '3.3.2'},
+            '.codex-plugin/plugin.json': {'version': '3.3.2'},
+            'package.json': {'version': '3.3.2'},
             'mcp.json': {'mcpServers': {'codex-pet': {'cwd': './', 'env': {'DAFEIYU_DESKTOP_ONLY': '1'}, 'args': []}}},
             '.mcp.json': {'mcpServers': {'codex-pet': {'cwd': './', 'env': {'DAFEIYU_DESKTOP_ONLY': '1'}, 'args': []}}},
         }.items():
@@ -50,7 +50,7 @@ class PackageTypeTests(unittest.TestCase):
         return subprocess.run([sys.executable, str(SOURCE_SCRIPT), '--root', str(self.project), '--output', str(output)], text=True, capture_output=True)
 
     def run_package(self, output, runtime=None, original=None):
-        command = [sys.executable, str(PACKAGE_SCRIPT), '--root', str(self.project), '--output', str(output), '--verify-directory', str(self.base / ('verify-' + output.stem)), '--metadata-directory', str(self.base / 'metadata'), '--version', '3.3.1']
+        command = [sys.executable, str(PACKAGE_SCRIPT), '--root', str(self.project), '--output', str(output), '--verify-directory', str(self.base / ('verify-' + output.stem)), '--metadata-directory', str(self.base / 'metadata'), '--version', '3.3.2']
         if runtime is not None:
             command += ['--runtime-archive', str(runtime)]
         if original is not None:
@@ -126,12 +126,12 @@ class PackageTypeTests(unittest.TestCase):
         result = subprocess.run(command, text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         report = json.loads((self.base / 'metadata/default-version.validation.json').read_text(encoding='utf-8'))
-        self.assertEqual(report['version'], '3.3.1')
+        self.assertEqual(report['version'], '3.3.2')
         with zipfile.ZipFile(output) as archive:
             metadata = json.loads(archive.read('大肥鱼/package.json'))
             marker = json.loads(archive.read('大肥鱼/PACKAGE-TYPE.json'))
-        self.assertEqual(metadata['version'], '3.3.1')
-        self.assertEqual(marker['version'], '3.3.1')
+        self.assertEqual(metadata['version'], '3.3.2')
+        self.assertEqual(marker['version'], '3.3.2')
 
 
 

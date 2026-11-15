@@ -1,6 +1,6 @@
 # 大肥鱼 · Codex 角色插件
 
-Windows 10/11 x64 本地角色插件，基于 3.3.1 项目持续维护。计划中的展示版本标签为 `Codex-Pet-V1.2`（尚未打标签，也尚未发布 GitHub Release）。
+Windows 10/11 x64 本地角色插件，基于 3.3.2 项目持续维护。当前展示版本标签为 `Codex-Pet-V1.3`。
 
 ## 功能
 
@@ -75,10 +75,10 @@ Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
 打包需要 Python 3.11+，可从已有完整安装包复用经过校验的运行时：
 
 ```powershell
-python tools/package.py --original "完整安装包.zip" --output "..\大肥鱼-完整安装包.zip" --version 3.3.1
+python tools/package.py --original "完整安装包.zip" --output "..\大肥鱼-完整安装包.zip" --version 3.3.2
 ```
 
-`--version` 默认值现已与源码对齐为 `3.3.1`，仍建议显式传入以免误用。`tools/package-source.py` 生成带 `PACKAGE-TYPE.json` 的源码包，不能当作完整安装包直接安装。完整安装包必须包含通过 `runtime-manifest.json` 校验的 `runtime.7z`。展示标签若发布，应使用 `Codex-Pet-V1.2`。
+`--version` 默认值现已与源码对齐为 `3.3.2`，仍建议显式传入以免误用。`tools/package-source.py` 生成带 `PACKAGE-TYPE.json` 的源码包，不能当作完整安装包直接安装。完整安装包必须包含通过 `runtime-manifest.json` 校验的 `runtime.7z`。展示标签为 `Codex-Pet-V1.3`。
 
 仓库保留源码、资源、测试和第三方许可证。运行时、安装包、用户数据和诊断文件由 `.gitignore` 排除；完整安装包作为 GitHub Releases 附件发布。
 

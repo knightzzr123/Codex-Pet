@@ -37,7 +37,7 @@ async function registerNativeStartup(executable, root = path.resolve(__dirname, 
     });
   }
   try {
-    await request('initialize', { clientInfo: { name: 'dafeiyu-native-startup', version: '3.3.1' }, capabilities: { experimentalApi: true } });
+    await request('initialize', { clientInfo: { name: 'dafeiyu-native-startup', version: '3.3.2' }, capabilities: { experimentalApi: true } });
     child.stdin.write(JSON.stringify({ method: 'initialized' }) + '\n');
     const current = await request('config/read', { cwd: root, includeLayers: false });
     const previous = current.config?.mcp_servers?.['codex-pet'];

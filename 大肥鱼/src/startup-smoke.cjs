@@ -36,7 +36,7 @@ async function protocolCheck() {
   });
   try {
     const initialized = await request('initialize', { protocolVersion: '2025-11-25', capabilities: {},
-      clientInfo: { name: 'dafeiyu-startup-smoke', version: '3.3.1' } });
+      clientInfo: { name: 'dafeiyu-startup-smoke', version: '3.3.2' } });
     timings.preparedLauncherInitializeMs = Date.now() - startedAt;
     child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
     const tools = await request('tools/list');
@@ -83,7 +83,7 @@ async function nativeSessionCheck() {
     const closing = setInterval(() => { if (fs.existsSync(${JSON.stringify(closeFile)})) server.stdin.end(); }, 50);
     server.on('exit', () => { clearInterval(closing); report.connected = false; save(); lines.close(); process.exit(0); });
     server.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {
-      protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'dafeiyu-native-session-smoke', version: '3.3.1' }
+      protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'dafeiyu-native-session-smoke', version: '3.3.2' }
     } }) + '\\n');
   `;
   const hostOptions = {
