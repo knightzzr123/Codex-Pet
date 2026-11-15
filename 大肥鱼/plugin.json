@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "dafeiyu-codex-pet",
-  "version": "3.3.0",
+  "version": "3.3.1",
   "description": "Windows Codex 角色插件：边缘吸附、自定义图片皮肤、十档大小、中文对话和账户剩余额度。",
   "author": {
     "name": "大肥鱼"

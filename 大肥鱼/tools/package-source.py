@@ -1,6 +1,7 @@
 """Create a GitHub source ZIP from Git's non-ignored project files."""
 import argparse
 import hashlib
+import json
 import subprocess
 import zipfile
 from pathlib import Path
@@ -24,6 +25,16 @@ files = []
 excluded_directories = {'runtime', 'node_modules', 'work', 'dist', 'data', 'unused', '.git', '.codex'}
 for name in names:
     relative = Path(name)
+    if name == 'PACKAGE-TYPE.json':
+        try:
+            marker = json.loads((root / relative).read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            raise SystemExit('Invalid PACKAGE-TYPE.json in source tree.')
+        if marker.get('packageType') == 'complete':
+            raise SystemExit('Source packaging refuses a complete package type marker.')
+        continue
+    if relative.name == 'runtime.7z' or 'runtime' in relative.parts:
+        raise SystemExit('Source packaging refuses runtime assets: ' + name)
     if relative.is_absolute() or '..' in relative.parts or relative.parts[0] in excluded_directories:
         raise ValueError('Generated files must not be tracked: ' + name)
     source = root / relative
@@ -38,6 +49,11 @@ output.parent.mkdir(parents=True, exist_ok=True)
 with zipfile.ZipFile(output, 'x', compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
     for name, source in files:
         archive.write(source, '大肥鱼/' + name)
+    marker = {
+        'packageType': 'source', 'installable': False,
+        'warning': '源码包不包含运行时，不能作为完整安装包直接安装。',
+    }
+    archive.writestr('大肥鱼/PACKAGE-TYPE.json', json.dumps(marker, ensure_ascii=False, indent=2) + '\n')
 with zipfile.ZipFile(output) as archive:
     if archive.testzip() is not None:
         raise ValueError('Source ZIP CRC verification failed.')
@@ -45,5 +61,9 @@ with zipfile.ZipFile(output) as archive:
         expected = hashlib.sha256(source.read_bytes()).digest()
         if hashlib.sha256(archive.read('大肥鱼/' + name)).digest() != expected:
             raise ValueError('Source ZIP hash mismatch: ' + name)
-print(f'{len(files)} source files, {sum(source.stat().st_size for _, source in files)} bytes before compression.')
+    if any(entry.filename == '大肥鱼/runtime.7z' or '/runtime/' in entry.filename for entry in archive.infolist()):
+        raise ValueError('Source ZIP must not contain runtime assets.')
+    if json.loads(archive.read('大肥鱼/PACKAGE-TYPE.json'))['packageType'] != 'source':
+        raise ValueError('Source ZIP package type marker is invalid.')
+print(f'source package: {len(files)} files, {sum(source.stat().st_size for _, source in files)} bytes before compression.')
 print(output)
