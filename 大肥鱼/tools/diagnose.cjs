@@ -53,9 +53,10 @@ function inspectMcpRegistration(codexPath, options = {}) {
     });
     const servers = normalizeMcpServers(JSON.parse(String(output).replace(/^\uFEFF/, '')));
     const server = servers.find(entry => (entry.name || entry.id || entry.serverName) === 'codex-pet') || null;
-    return { status: server ? (isExpectedMcpServer(server) ? 'ok' : 'mismatch') : 'missing', server, servers, readOnly: true };
+    // Do not echo full MCP entries: they can contain environment secrets.
+    return { status: server ? (isExpectedMcpServer(server) ? 'ok' : 'mismatch') : 'missing', serverName: server?.name || null, readOnly: true };
   } catch (error) {
-    return { status: 'unavailable', server: null, servers: [], error: String(error?.message || error), readOnly: true };
+    return { status: 'unavailable', serverName: null, error: String(error?.message || error), readOnly: true };
   }
 }
 

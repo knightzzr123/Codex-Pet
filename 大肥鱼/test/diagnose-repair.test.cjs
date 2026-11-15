@@ -5,7 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const {
-  buildReport, buildRepairPlan, applyRepairPlan, markerPayload, backupFile
+  buildReport, buildRepairPlan, applyRepairPlan, markerPayload, backupFile, inspectMcpRegistration
 } = require('../tools/diagnose.cjs');
 
 function fixture({ complete = false, withRuntime = false, marker = 'source' } = {}) {
@@ -144,4 +144,16 @@ test('Windows 完整包缺 runtime/ 时可用 7zr 解包动作，失败前不覆
   assert.equal(result.ok, true);
   assert.equal(called, 1);
   assert.equal(fs.existsSync(path.join(root, 'runtime', 'electron.exe')), true);
+});
+
+test('MCP 只读检查只返回状态，不泄露 MCP 配置或环境密钥', () => {
+  const result = inspectMcpRegistration('/fake/codex', {
+    execFileSyncImpl: () => JSON.stringify([{ name: 'codex-pet', command: 'electron.exe',
+      args: ['src/plugin-server.cjs'], env: { DAFEIYU_DESKTOP_ONLY: '1', SECRET_TOKEN: 'do-not-print' } }])
+  });
+  assert.equal(result.status, 'ok');
+  assert.equal(result.serverName, 'codex-pet');
+  assert.equal(result.server, undefined);
+  assert.equal(result.servers, undefined);
+  assert.doesNotMatch(JSON.stringify(result), /SECRET_TOKEN|do-not-print/);
 });
