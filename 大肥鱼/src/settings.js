@@ -42,7 +42,7 @@ function syncSettingsControls() {
       const button = document.createElement('button');
       const active = state.skin?.id === skin.id;
       button.type = 'button';
-      button.className = `settings-chip${active ? ' is-active' : ''}`;
+        button.className = `settings-skin-card${active ? ' is-active' : ''}`;
       button.title = skin.name;
       button.setAttribute?.('role', 'radio');
       button.setAttribute?.('aria-checked', String(active));
@@ -111,6 +111,15 @@ function syncSettingsControls() {
   if (version && state.version) version.textContent = `内部版本 ${state.version}`;
   const display = $('settings-display-version');
   if (display && state.displayVersion) display.textContent = state.displayVersion;
+  document.body.classList.toggle('reduced-motion', Boolean(experience.reducedMotion));
+  const scheme = state.colorScheme || 'system';
+  for (const button of nodes($('settings-color-scheme'), '[data-color-scheme]')) {
+    const active = button.getAttribute('data-color-scheme') === scheme;
+    button.setAttribute('aria-checked', String(active));
+    button.classList.toggle('is-active', active);
+  }
+  if (scheme === 'light' || scheme === 'dark') document.documentElement.dataset.theme = scheme;
+  else delete document.documentElement.dataset.theme;
 }
 
 function applyState(next) {
@@ -132,19 +141,21 @@ function showPreview(preview) {
   if (title) title.textContent = preview?.name ? `导入预览 · ${preview.name}` : '导入预览';
   const summary = $('settings-zip-preview-summary');
   const count = preview?.characters?.length || 0;
-  if (summary) summary.textContent = `${preview?.name || '皮肤包'} · ${count} 个角色${preview?.version ? ` · ${preview.version}` : ''}`;
+  const sizeText = formatBytes(preview?.totalBytes || 0);
+  if (summary) summary.textContent = `${preview?.name || '皮肤包'} · ${count} 个角色${preview?.version ? ` · ${preview.version}` : ''} · ${sizeText}`;
   const warning = $('settings-zip-preview-warning');
+  const duplicate = preview?.duplicate;
   if (warning) {
-    warning.hidden = !preview?.needsConfirm;
-    warning.textContent = preview?.needsConfirm
-      ? '已存在相同的皮肤包。取消则不会做任何更改；确认后才会继续导入。'
-      : '';
+    warning.hidden = !duplicate;
+    if (duplicate?.kind === 'content') warning.textContent = `已导入过「${duplicate.existingName || preview.name}」。继续将使用已有文件，不会复制第二份。`;
+    else if (duplicate) warning.textContent = `已有同名皮肤包「${duplicate.existingName}」。导入将作为新包保留，旧包不会被覆盖。`;
+    else warning.textContent = '';
   }
   const confirm = $('settings-zip-confirm');
   if (confirm) confirm.textContent = preview?.needsConfirm ? '确认并导入' : '导入';
   const list = $('settings-zip-preview-characters');
   if (list && typeof list.replaceChildren === 'function' && typeof document.createElement === 'function') {
-    list.replaceChildren(...(preview?.characters || []).map(character => {
+    list.replaceChildren(...(preview?.characters || []).slice(0, 12).map(character => {
       const item = document.createElement('div');
       item.className = 'settings-chip';
       if (character.thumbnailUrl) {
@@ -174,6 +185,44 @@ function setStatus(message) {
   if (status) status.textContent = message || '';
 }
 
+function formatBytes(bytes) {
+  const value = Number(bytes) || 0;
+  if (value >= 1024 * 1024) return `${(value / 1024 / 1024).toFixed(1)} MB`;
+  if (value >= 1024) return `${Math.round(value / 1024)} KB`;
+  return `${value} B`;
+}
+
+function live(message) { const node = $('settings-live'); if (node) node.textContent = message || ''; }
+function liveAssert(message) { const node = $('settings-live-assertive'); if (node) node.textContent = message || ''; }
+
+function setDropState(state, detail) {
+  const drop = $('settings-zip-drop');
+  if (!drop) return;
+  drop.dataset.state = state;
+  drop.classList.toggle('is-drag', state === 'hover');
+  const title = $('settings-drop-title');
+  const text = $('settings-drop-detail');
+  const labels = {
+    idle: ['将 .zip 或皮肤包文件夹拖到此处', '一次一个。也可以选择文件。'],
+    hover: ['松开以预览皮肤包', '将开始校验，写入前可以取消。'],
+    illegal: ['只能导入 .zip 或皮肤包文件夹', detail || '一次只能导入一个皮肤包'],
+    busy: ['正在校验…', '请稍候，完成前不能再次投放。'],
+    success: ['预览已就绪', '请在下方确认或取消。'],
+    error: ['导入失败', detail || '请重试。']
+  };
+  const pair = labels[state] || labels.idle;
+  if (title) title.textContent = pair[0];
+  if (text) text.textContent = detail || pair[1];
+  drop.setAttribute('aria-label', pair[0]);
+  const busy = state === 'busy';
+  for (const id of ['settings-import-zip', 'settings-import-pack', 'settings-import-skin']) {
+    const button = $(id);
+    if (button) button.disabled = busy;
+  }
+  if (state === 'success') drop.hidden = true;
+  if (state === 'idle' || state === 'error' || state === 'illegal') drop.hidden = false;
+}
+
 function isHiddenDeep(node) {
   let current = node;
   while (current) {
@@ -192,10 +241,14 @@ async function previewToken(token) {
     const preview = await window.settingsAPI.previewZip(token);
     if (!preview || preview.error) {
       clearPreview();
+      setDropState('error', preview?.error || '无法预览这个 ZIP。');
+      liveAssert(preview?.error || '无法预览这个 ZIP。');
       setStatus(preview?.error || '无法预览这个 ZIP。');
       return;
     }
     showPreview(preview);
+    setDropState('success');
+    live(`皮肤包「${preview.name || ''}」已就绪，请确认导入`);
     setStatus('');
   } catch (error) {
     clearPreview();
@@ -204,32 +257,58 @@ async function previewToken(token) {
 }
 
 async function chooseZip() {
+  setDropState('busy');
   const chosen = await window.settingsAPI?.chooseZip?.();
   if (chosen?.token) await previewToken(chosen.token);
+  else if (chosen?.image) {
+    setDropState('idle');
+    live(chosen.canceled ? '已取消图片导入' : '图片已导入');
+  } else setDropState('idle');
 }
 
+async function chooseFolder() {
+  setDropState('busy');
+  const chosen = await window.settingsAPI?.chooseFolder?.();
+  if (chosen?.token) await previewToken(chosen.token);
+  else setDropState('idle');
+}
+
+let importingZip = false;
 async function submitZip() {
-  if (!pendingToken || !window.settingsAPI?.importZip) return;
-  const result = await window.settingsAPI.importZip({ token: pendingToken, confirmSame: currentPreview?.needsConfirm === true });
-  if (result?.code === 'PACK_CONFIRM') {
-    showPreview({ ...(currentPreview || {}), needsConfirm: true, name: result.name || currentPreview?.name });
-    return;
+  if (importingZip || !pendingToken || !window.settingsAPI?.importZip) return;
+  importingZip = true;
+  setDropState('busy');
+  try {
+    const result = await window.settingsAPI.importZip({ token: pendingToken, confirmSame: currentPreview?.needsConfirm === true });
+    if (result?.code === 'PACK_CONFIRM') {
+      showPreview({ ...(currentPreview || {}), needsConfirm: true, name: result.name || currentPreview?.name });
+      setDropState('success');
+      return;
+    }
+    if (!result?.ok) {
+      setDropState('error', result?.error || '皮肤包导入失败。请重试。');
+      liveAssert(result?.error || '皮肤包导入失败。');
+      setStatus(result?.error || '皮肤包导入失败。');
+      return;
+    }
+    const done = result.pack?.name ? `已导入皮肤包「${result.pack.name}」。` : '皮肤包已导入。';
+    setStatus(done);
+    live(done);
+    clearPreview();
+    setDropState('idle');
+  } finally {
+    importingZip = false;
   }
-  if (!result?.ok) {
-    setStatus(result?.error || '皮肤包导入失败。');
-    return;
-  }
-  setStatus(result.pack?.name ? `已导入“${result.pack.name}”。` : '皮肤包已导入。');
-  clearPreview();
 }
 
 function bindStaticControls() {
-  $('settings-close')?.addEventListener('click', () => window.settingsAPI?.close?.());
+  $('settings-close')?.addEventListener('click', () => { beginClose(); });
   $('settings-panel')?.addEventListener('keydown', event => {
     if (event.key !== 'Tab') return;
     const panel = $('settings-panel');
     const focusable = nodes(panel, 'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])')
-      .filter(node => !isHiddenDeep(node));
+      .filter(node => !isHiddenDeep(node))
+      .filter(node => node.getAttribute?.('role') !== 'tab' || node.getAttribute?.('aria-selected') === 'true');
     if (!focusable.length) return;
     const first = focusable[0];
     const last = focusable.at(-1);
@@ -260,24 +339,56 @@ function bindStaticControls() {
     tab.addEventListener?.('click', () => selectCategory(tab.getAttribute('data-category')));
   }
   $('settings-import-skin')?.addEventListener('click', () => window.settingsAPI?.importSkin?.());
-  $('settings-import-pack')?.addEventListener('click', () => window.settingsAPI?.importSkinPack?.());
-  $('settings-import-zip')?.addEventListener('click', () => { chooseZip(); });
+  $('settings-import-pack')?.addEventListener('click', event => { event.stopPropagation(); chooseFolder(); });
+  $('settings-import-zip')?.addEventListener('click', event => { event.stopPropagation(); chooseZip(); });
+  $('settings-delete-skin')?.addEventListener('click', () => window.settingsAPI?.deleteCurrentSkin?.());
+  $('settings-reset-placement')?.addEventListener('click', () => window.settingsAPI?.resetPlacement?.());
+  $('settings-copy-diagnostics')?.addEventListener('click', async () => {
+    const result = await window.settingsAPI?.copyDiagnostics?.();
+    live(result?.ok ? '已复制' : (result?.error || '无法复制诊断信息'));
+  });
   $('settings-edit-dialogues')?.addEventListener('click', () => window.settingsAPI?.editDialogues?.());
   $('settings-export-preferences')?.addEventListener('click', () => window.settingsAPI?.exportPreferences?.());
   $('settings-import-preferences')?.addEventListener('click', () => window.settingsAPI?.importPreferences?.());
   const drop = $('settings-zip-drop');
-  drop?.addEventListener('dragover', event => { event.preventDefault(); drop.classList?.add('is-drag'); });
-  drop?.addEventListener('dragleave', () => drop.classList?.remove('is-drag'));
+  drop?.addEventListener('dragover', event => {
+    event.preventDefault();
+    if (drop.dataset.state === 'busy' || drop.hidden) return;
+    setDropState('hover');
+  });
+  drop?.addEventListener('dragleave', () => { if (drop.dataset.state === 'hover') setDropState('idle'); });
   drop?.addEventListener('drop', async event => {
     event.preventDefault();
-    drop.classList?.remove('is-drag');
-    const file = event.dataTransfer?.files?.[0];
-    if (!file || !window.settingsAPI?.registerDrop) return;
-    const registered = await window.settingsAPI.registerDrop(file);
-    if (registered?.token) previewToken(registered.token);
-    else setStatus(registered?.error || '无法读取拖入的文件。');
+    if (drop.dataset.state === 'busy' || drop.hidden) return;
+    const files = [...(event.dataTransfer?.files || [])];
+    if (files.length !== 1) {
+      setDropState('illegal', '一次只能导入一个皮肤包');
+      liveAssert('一次只能导入一个皮肤包');
+      return;
+    }
+    const file = files[0];
+    const name = String(file.name || '');
+    const zip = name.toLowerCase().endsWith('.zip');
+    const image = /\.(png|jpe?g|gif|webp|bmp)$/i.test(name);
+    if (!zip && !image && file.type && !file.type.startsWith('image/')) {
+      setDropState('illegal', '只能导入 .zip 或皮肤包文件夹');
+      liveAssert('只能导入 .zip 或皮肤包文件夹');
+      return;
+    }
+    setDropState('busy');
+    const registered = await window.settingsAPI?.registerDrop?.(file);
+    if (registered?.image) {
+      setDropState('idle');
+      live(registered.canceled ? '已取消图片导入' : '图片已导入');
+      return;
+    }
+    if (registered?.token) await previewToken(registered.token);
+    else {
+      setDropState('error', registered?.error || '无法读取拖入的文件。');
+      liveAssert(registered?.error || '无法读取拖入的文件。');
+    }
   });
-  for (const groupId of ['settings-skins', 'settings-size', 'settings-bubble-seconds']) {
+  for (const groupId of ['settings-skins', 'settings-size', 'settings-bubble-seconds', 'settings-color-scheme']) {
     $(groupId)?.addEventListener('keydown', event => {
       if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return;
       const radios = nodes($(groupId), '[role="radio"]');
@@ -296,7 +407,13 @@ function bindStaticControls() {
     chooseZip();
   });
   $('settings-zip-confirm')?.addEventListener('click', () => { submitZip(); });
-  $('settings-zip-cancel')?.addEventListener('click', () => { clearPreview(); setStatus('已取消，没有更改皮肤。'); });
+  $('settings-zip-cancel')?.addEventListener('click', async () => {
+    if (pendingToken) await window.settingsAPI?.cancelPreview?.(pendingToken);
+    clearPreview();
+    setDropState('idle');
+    live('已取消未导入的皮肤包');
+    setStatus('已取消，没有更改皮肤。');
+  });
   for (const [id, key, cast] of [
     ['settings-bubble-x', 'bubbleOffsetX', Number],
     ['settings-bubble-y', 'bubbleOffsetY', Number],
@@ -325,14 +442,54 @@ function bindStaticControls() {
     button.addEventListener('click', () => window.settingsAPI?.resetSetting?.(button.getAttribute('data-reset-key')));
   }
   for (const button of nodes(document, '[data-reset-group]')) {
-    button.addEventListener('click', () => window.settingsAPI?.resetGroup?.(button.getAttribute('data-reset-group')));
+    button.addEventListener('click', () => {
+      if (button.dataset.confirming !== '1') {
+        button.dataset.confirming = '1';
+        button.dataset.originalLabel = button.textContent;
+        button.textContent = '确定重置？';
+        setTimeout(() => {
+          button.dataset.confirming = '';
+          button.textContent = button.dataset.originalLabel || '重置本组';
+        }, 5000);
+        return;
+      }
+      button.dataset.confirming = '';
+      button.textContent = button.dataset.originalLabel || '重置本组';
+      window.settingsAPI?.resetGroup?.(button.getAttribute('data-reset-group'));
+      live('已恢复本组默认设置。');
+    });
+  }
+  for (const button of nodes($('settings-color-scheme'), '[data-color-scheme]')) {
+    button.addEventListener('click', () => window.settingsAPI?.setExperience?.('colorScheme', button.getAttribute('data-color-scheme')));
   }
   $('settings-reset-all')?.addEventListener('click', () => window.settingsAPI?.resetAll?.());
-  window.addEventListener?.('keydown', event => {
+  window.addEventListener?.('keydown', async event => {
     if (event.key !== 'Escape') return;
     event.preventDefault();
-    window.settingsAPI?.close?.();
+    if (pendingToken) {
+      await window.settingsAPI?.cancelPreview?.(pendingToken);
+      clearPreview();
+      setDropState('idle');
+      live('已取消未导入的皮肤包');
+      return;
+    }
+    await beginClose();
   });
+  window.settingsAPI?.onRequestClose?.(() => { beginClose(); });
+}
+
+async function beginClose() {
+  if (window.__dialogueDirty) {
+    const agreed = typeof window.confirm !== 'function' || window.confirm('有未保存的台词。关闭将放弃这些草稿。');
+    if (!agreed) return;
+    window.__dialogueDirty = false;
+  }
+  if (pendingToken) {
+    await window.settingsAPI?.cancelPreview?.(pendingToken);
+    clearPreview();
+    setDropState('idle');
+  }
+  window.settingsAPI?.close?.();
 }
 
 function mockState() {
@@ -340,8 +497,8 @@ function mockState() {
     version: '3.4.0', displayVersion: 'Codex-Pet-V1.4', sizeLevel: 4,
     skin: { id: 'default', name: '默认 · 鲸鱼娘' },
     skins: [
-      { id: 'default', name: '默认 · 鲸鱼娘' },
-      { id: 'rose', name: '紫角玫瑰 · 半身' }
+      { id: 'default', name: '默认 · 鲸鱼娘', thumbnailUrl: 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="72" height="72"><rect width="72" height="72" rx="16" fill="#d7e3ff"/><text x="36" y="46" text-anchor="middle" font-size="32">🐟</text></svg>') },
+      { id: 'rose', name: '紫角玫瑰 · 半身', thumbnailUrl: 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="72" height="72"><rect width="72" height="72" rx="16" fill="#f3d7e4"/><text x="36" y="46" text-anchor="middle" font-size="32">🌹</text></svg>') }
     ],
     experience: {
       bubbleSeconds: 8, advanceOnPetTap: false, bubbleOffsetX: 0, bubbleOffsetY: 0,
@@ -358,8 +515,16 @@ function boot() {
     window.settingsAPI.onState(applyState);
     window.settingsAPI.getState?.().then(applyState).catch(() => {});
   } else if (search().get('preview') === '1') applyState(mockState());
-  $('tab-appearance')?.focus?.({ preventScroll: true }) || focusClose();
+  const currentTab = document.querySelector?.('#settings-nav [aria-selected="true"]') || $('tab-appearance');
+  currentTab?.focus?.({ preventScroll: true });
   window.settingsAPI?.onShowGroup?.(selectCategory);
+  window.settingsAPI?.onPreviewToken?.(token => previewToken(token));
+  window.settingsAPI?.about?.().then(info => {
+    if (!info) return;
+    if ($('settings-electron')) $('settings-electron').textContent = info.electron ? `Electron ${info.electron}` : 'Electron（当前不是 Electron 进程）';
+    if ($('settings-data-dir')) $('settings-data-dir').textContent = `数据目录 ${info.dataDir || ''}`;
+    if ($('settings-work-dir')) $('settings-work-dir').textContent = `工作目录 ${info.workDir || ''}`;
+  }).catch(() => {});
 }
 
 boot();

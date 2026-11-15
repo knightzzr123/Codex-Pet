@@ -9,7 +9,7 @@ const { pathToFileURL } = require('node:url');
 const { readQuota } = require('./quota.cjs');
 const { scopedBounds, snapBounds, clampBounds, shouldShow } = require('./scope.cjs');
 const { writeJsonAtomic, createCoalescedWriter } = require('./persist.cjs');
-const { DEFAULT_SKIN_ID, EXPERIENCE_KEYS, GROUP_KEYS, ALL_RESET_KEYS, resetPreferenceKeys, settingsKeyDefault } = require('./settings-ia.cjs');
+const { DEFAULT_SKIN_ID, EXPERIENCE_KEYS, GROUP_KEYS, ALL_RESET_KEYS, resetPreferenceKeys, settingsKeyDefault, normalizeColorScheme } = require('./settings-ia.cjs');
 const { createDebouncedShowHide, createDebouncedDiskStatus } = require('./scope-visibility.cjs');
 const { SIZE_SCALES, DEFAULT_SIZE_LEVEL, isSizeLevel, sizeLevelFromPreferences, scaleForLevel } = require('./size.cjs');
 const { getDataDir, getWorkDir } = require('./paths.cjs');
@@ -207,6 +207,7 @@ else {
     state.settingsOpen = Boolean(getSettingsWindow());
     state.version = APP_VERSION;
     state.displayVersion = DISPLAY_VERSION;
+    state.colorScheme = normalizeColorScheme(preferences.colorScheme);
     try { applyExperienceChrome(); } catch {}
     if (win && !win.isDestroyed() && rendererReady) win.webContents.send('pet:state', state);
     const settingsWindow = getSettingsWindow();
@@ -214,7 +215,23 @@ else {
       try { settingsWindow.webContents.send('settings:state', state); } catch {}
     }
   }
+  function settingsBackground() {
+    const scheme = normalizeColorScheme(preferences.colorScheme);
+    let dark = scheme === 'dark';
+    if (scheme === 'system') {
+      try { dark = require('electron').nativeTheme.shouldUseDarkColors === true; } catch { dark = false; }
+    }
+    return dark ? '#161b2c' : '#f5f7fc';
+  }
   function setExperience(key, value) {
+    if (key === 'colorScheme') {
+      preferences.colorScheme = normalizeColorScheme(value);
+      savePreferences();
+      const settingsWindow = getSettingsWindow();
+      if (settingsWindow) { try { settingsWindow.setBackgroundColor(settingsBackground()); } catch {} }
+      publish();
+      return;
+    }
     const mapped = key === 'idleInterval' ? 'idleIntervalSec' : key;
     const next = experienceFromPreferences({ ...preferences, [mapped]: value });
     if (!Object.hasOwn(next, mapped)) return;
@@ -348,28 +365,23 @@ else {
     setSkin(skin.id);
     return skin;
   }
-  async function chooseSkinPack() {
+  async function chooseSkinPack(event) {
     if (importingSkin || deletingSkin || editingDialogues) return;
     importingSkin = true;
     cancelDrag();
+    const parent = dialogOwner(event) || getSettingsWindow() || win;
     try {
-      const result = await dialog.showOpenDialog(win, {
-        title: '导入皮肤包文件夹', buttonLabel: '导入皮肤包', properties: ['openDirectory'],
+      const result = await dialog.showOpenDialog(parent, {
+        title: '导入皮肤包文件夹', buttonLabel: '预览', properties: ['openDirectory'],
         message: '选择包含 manifest.json、角色图片和缩略图的文件夹'
       });
       if (result.canceled || !result.filePaths[0]) return;
-      const pack = await skinPacks.importDirectory(result.filePaths[0], validateSkinImage);
-      if (!pack?.characters?.length) throw new Error('皮肤包没有可用角色。');
-      const first = pack.characters[0];
-      setSkin(packCharacterId(pack.id, first.id));
-      await dialog.showMessageBox(win, {
-        type: 'info', title: '皮肤包已导入', message: `已导入“${pack.name}”`,
-        detail: `包含 ${pack.characters.length} 个角色，可在设置的“外观”分组中切换。`
-      });
+      const token = rememberZip(result.filePaths[0], 'directory');
+      const settingsWindow = getSettingsWindow();
+      if (settingsWindow) settingsWindow.webContents.send('settings:preview-token', token);
     } catch (error) {
-      await dialog.showMessageBox(win, { type: 'error', title: '无法导入皮肤包',
-        message: '皮肤包导入失败',
-        detail: error.code ? '无法读取或保存皮肤包，请确认文件夹和文件可读、数据目录可写。' : error.message });
+      await dialog.showMessageBox(parent, { type: 'error', title: '无法预览皮肤包',
+        message: '皮肤包预览失败', detail: zipFailure(error) });
     } finally { importingSkin = false; }
   }
   async function deleteImportedPack(id) {
@@ -448,6 +460,7 @@ else {
     if (typeof settings.skinId === 'string' && settings.skinId && settings.skinId !== state.skin.id) {
       setSkin(settings.skinId);
     }
+    if (settings.colorScheme) preferences.colorScheme = normalizeColorScheme(settings.colorScheme);
     savePreferences({ immediate: true });
   }
   async function exportPreferences() {
@@ -495,14 +508,8 @@ else {
       return false;
     }
   }
-  async function chooseDialogueEditor() {
-    if (editingDialogues || importingSkin || deletingSkin) return;
-    editingDialogues = true; cancelDrag();
-    try {
-      await openDialogueEditor(win, state.dialogues, saveDialogues);
-    } catch (error) {
-      await dialog.showMessageBox(win, { type: 'error', title: '无法编辑台词', message: '台词编辑窗口未能打开，请重试。' });
-    } finally { editingDialogues = false; }
+  function chooseDialogueEditor() {
+    openSettingsPanel('dialogue');
   }
   function saveDialogues(draft) {
     state.dialogues = dialogueLibrary.save(draft);
@@ -533,49 +540,86 @@ else {
       throw error;
     }
   }
-  function rememberZip(filePath) {
+  function rememberZip(filePath, kind = 'zip') {
     const stat = fs.lstatSync(filePath);
-    if (stat.isSymbolicLink() || !stat.isFile()) {
-      const error = new Error('只能导入普通 ZIP 文件。');
+    if (stat.isSymbolicLink() || (kind === 'zip' && !stat.isFile()) || (kind === 'directory' && !stat.isDirectory())) {
+      const error = new Error(kind === 'directory' ? '请选择皮肤包文件夹。' : '只能导入普通 ZIP 文件。');
       error.code = 'ZIP_FORMAT';
       throw error;
     }
-    return zipGrants.grant(filePath);
+    return zipGrants.grant(filePath, { kind });
+  }
+  function isImageSelection(filePath) {
+    return typeof filePath === 'string' && /\.(png|jpe?g|gif|webp|bmp)$/i.test(filePath);
+  }
+  async function importImageFromPath(filePath, parent) {
+    const source = readImageFile(filePath);
+    await validateSkinImage(source.bytes, source.mime);
+    const edited = await openSkinEditor(parent || win, source);
+    if (!edited) return { image: true, canceled: true };
+    const skin = await skins.importBytes(edited.bytes, edited.name, validateSkinImage);
+    setSkin(skin.id);
+    return { image: true, canceled: false };
   }
   async function chooseZipFile(event) {
     assertSettingsSender(event);
     const result = await dialog.showOpenDialog(dialogOwner(event), {
-      title: '导入 ZIP 皮肤包', buttonLabel: '预览', properties: ['openFile'],
-      filters: [{ name: 'ZIP 皮肤包', extensions: ['zip'] }]
+      title: '导入皮肤包或图片', buttonLabel: '继续', properties: ['openFile'],
+      filters: [{ name: 'ZIP 或图片', extensions: ['zip', 'png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'] }]
     });
     if (result.canceled || !result.filePaths[0]) return { canceled: true };
-    return { canceled: false, token: rememberZip(result.filePaths[0]) };
+    const filePath = result.filePaths[0];
+    if (isImageSelection(filePath)) return importImageFromPath(filePath, dialogOwner(event));
+    return { canceled: false, token: rememberZip(filePath) };
+  }
+  function cancelPreviewToken(token) {
+    zipPrepared.delete(token);
+    zipGrants.forget(token);
+    return { ok: true };
   }
   async function importGrantedZip(token, confirmSame) {
-    const files = zipPrepared.get(token);
-    if (!files) {
+    const prepared = zipPrepared.get(token);
+    if (!prepared) {
       const error = new Error('请先预览这个皮肤包，再确认导入。');
       error.code = 'ZIP_UNREGISTERED';
       throw error;
     }
-    const pack = await skinPacks.importPrepared(files, validateSkinImage, { confirmSame: confirmSame === true });
+    if (prepared.needsConfirm && confirmSame !== true) {
+      const error = new Error('已存在相同内容的皮肤包。取消则不会做任何更改；确认后使用已有文件，不会复制第二份。');
+      error.code = 'PACK_CONFIRM';
+      throw error;
+    }
+    const pack = prepared.kind === 'directory'
+      ? await skinPacks.importDirectory(prepared.filePath, validateSkinImage)
+      : await skinPacks.importPrepared(prepared.files, validateSkinImage, { confirmSame: true });
     zipPrepared.delete(token);
     zipGrants.forget(token);
     if (!pack?.characters?.length) throw new Error('皮肤包没有可用角色。');
-    setSkin(packCharacterId(pack.id, pack.characters[0].id));
+    const first = pack.characters[0];
+    setSkin(packCharacterId(pack.id, first.id));
     return { id: pack.id, name: pack.name, characterCount: pack.characters.length };
   }
   function openSettingsPanel(groupId) {
     cancelDrag();
-    openSettingsWindow({
+    const existed = Boolean(getSettingsWindow());
+    const settingsWindow = openSettingsWindow({
       anchor: win,
       groupId: typeof groupId === 'string' ? groupId : undefined,
+      backgroundColor: settingsBackground(),
       onClosed: () => {
         zipPrepared.clear();
+        try { zipGrants.forgetAll(); } catch {}
         publish();
         if (win && !win.isDestroyed()) win.focus();
       }
     });
+    if (typeof groupId === 'string' && settingsWindow && !settingsWindow.isDestroyed?.()) {
+      const send = () => {
+        if (!settingsWindow.isDestroyed()) settingsWindow.webContents.send('settings:show-group', groupId);
+      };
+      if (existed) send();
+      else settingsWindow.webContents.once('did-finish-load', send);
+    }
     publish();
   }
   function buildFunctionMenu() {
@@ -764,6 +808,21 @@ else {
     refreshScalePending = Boolean(payload.changedMetrics?.includes('scaleFactor') || payload.kind === 'removed');
     try { positionWindow(); }
     finally { refreshScalePending = false; }
+    try {
+      const settingsWindow = getSettingsWindow();
+      if (settingsWindow) {
+        const display = screen.getDisplayMatching(settingsWindow.getBounds());
+        const area = display.workArea;
+        const bounds = settingsWindow.getBounds();
+        const width = Math.min(bounds.width, area.width);
+        const height = Math.min(bounds.height, area.height);
+        const x = Math.round(Math.min(Math.max(bounds.x, area.x), area.x + area.width - width));
+        const y = Math.round(Math.min(Math.max(bounds.y, area.y), area.y + area.height - height));
+        if (x !== bounds.x || y !== bounds.y || width !== bounds.width || height !== bounds.height) {
+          settingsWindow.setBounds({ x, y, width, height });
+        }
+      }
+    } catch { /* settings window follows the pet's screen events */ }
     if (!plan.relocate || !win.isVisible()) return;
     const bounds = win.getBounds();
     let displays = [];
@@ -1281,7 +1340,7 @@ else {
       setPlacement: placement => { preferences.placement = placement; savePreferences(); positionWindow(); publish(); },
       dragStart, dragMove, dragEnd });
     const dialogueEditorChecks = await require('./dialogue-editor-smoke.cjs')({ win, work, getMenu: buildFunctionMenu,
-      chooseDialogueEditor, getDialogueEditorWindow, getDialogues: () => state.dialogues,
+      chooseDialogueEditor: () => openDialogueEditor(win, state.dialogues, saveDialogues), getDialogueEditorWindow, getDialogues: () => state.dialogues,
       saveDialogues, dialogueFile: dialogueLibrary.file });
     const bounds = win.getBounds();
     const area = scope.rect ? currentArea() : null;
@@ -1357,16 +1416,36 @@ else {
     ipcMain.on('pet:menu', openFunctionMenu);
     ipcMain.on('pet:settings-open', openSettingsPanel);
     ipcMain.handle('settings:get-state', () => state);
-    ipcMain.handle('settings:about', () => ({ version: APP_VERSION, displayVersion: DISPLAY_VERSION }));
+    ipcMain.handle('settings:about', () => ({
+      version: APP_VERSION,
+      displayVersion: DISPLAY_VERSION,
+      electron: process.versions.electron || '',
+      platform: process.platform,
+      dataDir: app.getPath('userData'),
+      workDir: work
+    }));
     ipcMain.on('settings:close', event => {
       const owner = dialogOwner(event);
-      if (owner && owner !== win && !owner.isDestroyed()) owner.close();
+      if (owner && owner !== win && !owner.isDestroyed()) {
+        zipPrepared.clear();
+        try { zipGrants.forgetAll(); } catch {}
+        owner.__allowClose = true;
+        owner.close();
+      }
     });
     ipcMain.handle('settings:choose-zip', event => chooseZipFile(event));
-    ipcMain.handle('settings:register-drop', (event, filePath) => {
+    ipcMain.handle('settings:register-drop', async (event, filePath) => {
       try {
         assertSettingsSender(event);
-        return { token: rememberZip(filePath) };
+        if (typeof filePath !== 'string' || !path.isAbsolute(filePath)) {
+          const error = new Error('拖放没有登记到本机文件。');
+          error.code = 'ZIP_UNREGISTERED';
+          throw error;
+        }
+        if (isImageSelection(filePath)) return importImageFromPath(filePath, dialogOwner(event));
+        const stat = fs.lstatSync(filePath);
+        const token = stat.isDirectory() ? rememberZip(filePath, 'directory') : rememberZip(filePath);
+        return { token };
       } catch (error) {
         return { ok: false, error: zipFailure(error), code: error.code || 'ZIP_UNREGISTERED' };
       }
@@ -1374,13 +1453,77 @@ else {
     ipcMain.handle('settings:preview-zip', async (event, token) => {
       try {
         assertSettingsSender(event);
-        const filePath = zipGrants.resolve(token);
-        const identified = await skinPacks.inspectZip(filePath);
-        zipPrepared.set(token, identified.files);
+        const grant = zipGrants.resolve(token);
+        const identified = grant.kind === 'directory'
+          ? skinPacks.identifyDirectory(grant.filePath)
+          : await skinPacks.inspectZip(grant.filePath);
+        zipPrepared.set(token, {
+          kind: grant.kind,
+          filePath: grant.filePath,
+          files: identified.files,
+          needsConfirm: identified.needsConfirm === true
+        });
         return skinPacks.previewFromIdentified(identified);
       } catch (error) {
         return { ok: false, error: zipFailure(error), code: error.code || 'ZIP_REJECTED' };
       }
+    });
+    ipcMain.handle('settings:choose-folder', async event => {
+      try {
+        assertSettingsSender(event);
+        const result = await dialog.showOpenDialog(dialogOwner(event), {
+          title: '导入皮肤包文件夹', buttonLabel: '预览', properties: ['openDirectory'],
+          message: '选择包含 manifest.json、角色图片和缩略图的文件夹'
+        });
+        if (result.canceled || !result.filePaths[0]) return { canceled: true };
+        return { canceled: false, token: rememberZip(result.filePaths[0], 'directory') };
+      } catch (error) {
+        return { ok: false, error: zipFailure(error), code: error.code || 'ZIP_REJECTED' };
+      }
+    });
+    ipcMain.handle('settings:cancel-preview', (event, token) => {
+      try { assertSettingsSender(event); return cancelPreviewToken(token); }
+      catch (error) { return { ok: false, error: zipFailure(error), code: error.code || 'ZIP_UNREGISTERED' }; }
+    });
+    ipcMain.handle('settings:copy-diagnostics', event => {
+      try {
+        assertSettingsSender(event);
+        const { clipboard } = require('electron');
+        const text = [
+          `版本 ${APP_VERSION}`,
+          `展示标签 ${DISPLAY_VERSION}`,
+          `Electron ${process.versions.electron || '未随 Electron 启动'}`,
+          `平台 ${process.platform}`,
+          `数据目录 ${app.getPath('userData')}`,
+          `工作目录 ${work}`
+        ].join('\n');
+        clipboard.writeText(text);
+        return { ok: true, text };
+      } catch (error) {
+        return { ok: false, error: error.message };
+      }
+    });
+    ipcMain.handle('settings:dialogue-source', event => {
+      assertSettingsSender(event);
+      return { current: state.dialogues, defaults: defaultDialogues() };
+    });
+    ipcMain.handle('settings:dialogue-save', (event, draft) => {
+      try {
+        assertSettingsSender(event);
+        saveDialogues(draft);
+        return { ok: true };
+      } catch (error) {
+        return { ok: false, error: error.message };
+      }
+    });
+    ipcMain.on('settings:reset-placement', event => { try { assertSettingsSender(event); resetPlacement(); } catch {} });
+    ipcMain.on('settings:delete-current-skin', event => {
+      try {
+        assertSettingsSender(event);
+        const parsed = parsePackCharacterId(state.skin.id);
+        if (parsed) deleteImportedPack(parsed.packId);
+        else deleteImportedSkin(state.skin.id);
+      } catch {}
     });
     ipcMain.handle('settings:import-zip', async (event, payload) => {
       try {
@@ -1395,7 +1538,7 @@ else {
     ipcMain.on('pet:size-level', (_event, level) => setSizeLevel(Number(level)));
     ipcMain.on('pet:set-skin', (_event, id) => setSkin(id));
     ipcMain.on('pet:import-skin', () => { chooseSkinImage(); });
-    ipcMain.on('pet:import-skin-pack', () => { chooseSkinPack(); });
+    ipcMain.on('pet:import-skin-pack', event => { chooseSkinPack(event); });
     ipcMain.on('pet:delete-skin-pack', (_event, id) => { deleteImportedPack(id); });
     ipcMain.on('pet:edit-dialogues', () => { openSettingsPanel('dialogue'); });
     ipcMain.on('pet:export-preferences', () => { exportPreferences(); });
@@ -1435,6 +1578,15 @@ else {
       }, 250);
     });
     win.on('blur', cancelDrag);
+    try {
+      const { nativeTheme } = require('electron');
+      nativeTheme.on('updated', () => {
+        if (normalizeColorScheme(preferences.colorScheme) !== 'system') return;
+        const settingsWindow = getSettingsWindow();
+        if (settingsWindow) { try { settingsWindow.setBackgroundColor(settingsBackground()); } catch {} }
+        publish();
+      });
+    } catch { /* native theme is unavailable outside Electron */ }
     screen.on('display-metrics-changed', (_event, _display, changedMetrics) => scheduleScreenEvent('metrics', changedMetrics));
     screen.on('display-removed', () => scheduleScreenEvent('removed'));
     screen.on('display-added', () => scheduleScreenEvent('added'));

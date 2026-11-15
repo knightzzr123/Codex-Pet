@@ -72,7 +72,7 @@ for (const kind of ['speech', 'sleepy']) {
 $('line-text').addEventListener('input', () => {
   if (!draft || saving || !list().length) return;
   list()[selected[category]] = $('line-text').value;
-  updateRow(selected[category]); updatePreview(); status('有修改尚未保存。保存后立即生效。');
+  updateRow(selected[category]); updatePreview(); markDirty(); status('有修改尚未保存。保存后立即生效。');
 });
 $('add').addEventListener('click', () => {
   if (!draft || saving || list().length >= MAX_DIALOGUES) return;
@@ -89,9 +89,17 @@ $('restore').addEventListener('click', () => {
   draft = structuredClone(defaults); selected = { speech: 0, sleepy: 0 };
   switchCategory(category); status('已载入默认台词，保存后生效；取消会保留之前的台词。');
 });
-$('cancel').addEventListener('click', () => { if (!saving) window.dialogueEditorAPI.cancel(); });
+function markDirty() { window.__dialogueDirty = true; }
+$('cancel').addEventListener('click', () => {
+  if (saving) return;
+  window.__dialogueDirty = false;
+  if (window.settingsAPI) window.dialogueEditorAPI.getSource().then(source => {
+    draft = structuredClone(source.current); switchCategory(category); status('已放弃未保存的台词。');
+  });
+  else window.dialogueEditorAPI.cancel();
+});
 window.addEventListener('keydown', event => {
-  if (event.key === 'Escape' && !saving) { event.preventDefault(); window.dialogueEditorAPI.cancel(); }
+  if (event.key === 'Escape' && !saving && !window.settingsAPI) { event.preventDefault(); window.dialogueEditorAPI.cancel(); }
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') { event.preventDefault(); $('save').click(); }
 });
 $('save').addEventListener('click', async () => {
@@ -101,13 +109,20 @@ $('save').addEventListener('click', async () => {
   try {
     const reply = await window.dialogueEditorAPI.save(draft);
     if (!reply?.ok) throw new Error(reply?.error || '保存失败，请重试。');
+    window.__dialogueDirty = false;
+    saving = false;
+    $('save').disabled = false;
+    $('save').textContent = '保存并应用';
+    renderList();
+    status('台词已保存。');
+    return;
   } catch (error) {
     saving = false; $('save').disabled = false; $('save').textContent = '保存并应用';
     $('restore').disabled = false; $('cancel').disabled = false;
     renderList(); status(error.message, true);
   }
 });
-window.dialogueEditorAPI.getSource().then(source => {
+if (window.dialogueEditorAPI) window.dialogueEditorAPI.getSource().then(source => {
   if (!source) throw new Error('无法读取台词，请关闭后重新打开。');
   draft = structuredClone(source.current); defaults = source.defaults;
   switchCategory('speech'); $('restore').disabled = false; $('save').disabled = false;

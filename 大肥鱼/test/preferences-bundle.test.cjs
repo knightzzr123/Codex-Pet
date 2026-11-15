@@ -28,7 +28,8 @@ test('导出只包含白名单设置与皮肤清单，不含图片、路径、�
   assert.equal(bundle.manifestVersion, MANIFEST_VERSION);
   assert.deepEqual(bundle.settings, {
     skinId: 'rose', sizeLevel: 7, bubbleSeconds: 15, advanceOnPetTap: true, mirrorOnLeft: false,
-    reducedMotion: true, bubbleOffsetX: 12, bubbleOffsetY: -6, idleIntervalSec: 60, opacity: 0.7
+    reducedMotion: true, bubbleOffsetX: 12, bubbleOffsetY: -6, idleIntervalSec: 60, opacity: 0.7,
+    colorScheme: 'system'
   });
   assert.equal(bundle.skins.selected, 'rose');
   assert.deepEqual(bundle.skins.catalog, catalog.map(({ id, name, kind }) => ({ id, name, kind })));

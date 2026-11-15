@@ -437,8 +437,19 @@ class SkinPackLibrary {
     }
     const id = packContentId(manifest, sources);
     const sourceKey = typeof manifest.id === 'string' ? manifest.id.toLowerCase() : '';
-    const needsConfirm = Boolean(this.get(id)) || (Boolean(sourceKey) && this.sourceIds().some(item => item.toLowerCase() === sourceKey));
-    return { id, manifest, sources, needsConfirm };
+    const existing = this.get(id);
+    let duplicate = null;
+    if (existing) duplicate = { kind: 'content', existingId: existing.id, existingName: existing.name };
+    else if (sourceKey) {
+      const match = this.entries.find(entry => String(entry.sourceId || '').toLowerCase() === sourceKey);
+      if (match) duplicate = { kind: 'sourceId', existingId: match.id, existingName: match.name };
+    }
+    if (!duplicate) {
+      const named = this.entries.find(entry => entry.name === manifest.name);
+      if (named) duplicate = { kind: 'name', existingId: named.id, existingName: named.name };
+    }
+    const packedBytes = sources.reduce((sum, source) => sum + source.imageBytes.length + (source.thumbnailBytes?.length || 0), 0);
+    return { id, manifest, sources, needsConfirm: duplicate?.kind === 'content', duplicate, totalBytes: packedBytes };
   }
 
   previewFromIdentified(identified) {
@@ -448,6 +459,9 @@ class SkinPackLibrary {
       version: identified.manifest.version,
       sourceId: identified.manifest.id || '',
       needsConfirm: identified.needsConfirm,
+      duplicate: identified.duplicate || null,
+      totalBytes: identified.totalBytes || 0,
+      characterCount: identified.sources.length,
       characters: identified.sources.map(source => ({
         id: source.character.id,
         name: source.character.name,

@@ -44,9 +44,10 @@ function openSettingsWindow(options = {}) {
       title: '设置 · 大肥鱼',
       parent: options.anchor && options.anchor.isDestroyed?.() !== true ? options.anchor : undefined,
       modal: false,
+      fullscreenable: false,
       show: false,
       autoHideMenuBar: true,
-      backgroundColor: '#f5f7fc',
+      backgroundColor: options.backgroundColor || '#f5f7fc',
       webPreferences: {
         preload: path.join(__dirname, 'settings-preload.cjs'),
         contextIsolation: true,
@@ -57,6 +58,17 @@ function openSettingsWindow(options = {}) {
     win.setMenu(null);
     win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     win.webContents.on('will-navigate', event => event.preventDefault());
+    win.webContents.on('before-input-event', (event, input) => {
+      if (input.type === 'keyDown' && input.control && !input.alt && !input.meta && input.key === ',') {
+        event.preventDefault();
+        win.focus();
+      }
+    });
+    win.on('close', event => {
+      if (win.__allowClose) return;
+      event.preventDefault();
+      if (!win.webContents.isDestroyed()) win.webContents.send('settings:request-close');
+    });
     win.once('ready-to-show', () => { if (!win.isDestroyed()) win.show(); });
     win.on('closed', () => {
       if (active === win) active = null;

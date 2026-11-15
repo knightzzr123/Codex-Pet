@@ -103,7 +103,8 @@ test('设置对话框的读屏名称和焦点循环在独立设置窗口里', ()
   const html = fs.readFileSync(path.join(root, 'src', 'settings.html'), 'utf8');
   const settings = fs.readFileSync(path.join(root, 'src', 'settings.js'), 'utf8');
   assert.match(html, /role="dialog"/);
-  assert.match(html, /aria-modal="true"/);
+  assert.doesNotMatch(html, /aria-modal="true"/);
+  assert.match(html, /aria-orientation="vertical"/);
   assert.match(html, /aria-labelledby="settings-title"/);
   assert.match(html, /aria-describedby="settings-intro"/);
   assert.match(html, /id="settings-title"/);

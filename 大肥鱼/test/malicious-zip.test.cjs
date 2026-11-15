@@ -53,7 +53,7 @@ test('未登记路径和 UNC / \\\\?\\ 不能进入导入', () => {
   assert.throws(() => assertGrantableZipPath('\\\\?\\C:\\Temp\\pack.zip'), error => error.code === 'ZIP_UNC');
   assert.throws(() => grants.resolve('not-a-token'), error => error.code === 'ZIP_UNREGISTERED');
   const token = grants.grant('C:/Users/qa/pack.zip');
-  assert.equal(grants.resolve(token), 'C:/Users/qa/pack.zip');
+  assert.equal(grants.resolve(token).filePath, 'C:/Users/qa/pack.zip');
   const main = fs.readFileSync(path.join(__dirname, '..', 'src', 'main.cjs'), 'utf8');
   assert.match(main, /assertSettingsSender/);
   assert.match(main, /zipGrants\.resolve\(token\)/);

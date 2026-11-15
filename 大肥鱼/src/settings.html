@@ -9,7 +9,7 @@
   <script src="settings.js" defer></script>
 </head>
 <body>
-  <div id="settings-panel" class="settings-app" role="dialog" aria-modal="true" aria-labelledby="settings-title" aria-describedby="settings-intro">
+  <div id="settings-panel" class="settings-app" role="dialog" aria-labelledby="settings-title" aria-describedby="settings-intro">
     <header class="settings-header">
       <div>
         <p class="settings-kicker">大肥鱼</p>
@@ -19,7 +19,7 @@
       <button type="button" id="settings-close" class="settings-close" aria-label="关闭设置" title="关闭设置（Esc）">关闭</button>
     </header>
     <div class="settings-body">
-      <nav id="settings-nav" class="settings-nav" role="tablist" aria-label="设置分类">
+      <nav id="settings-nav" class="settings-nav" role="tablist" aria-orientation="vertical" aria-label="设置分类">
         <button type="button" class="settings-tab" role="tab" id="tab-appearance" data-category="appearance" aria-controls="panel-appearance" aria-selected="true" tabindex="0">外观/皮肤</button>
         <button type="button" class="settings-tab" role="tab" id="tab-dialogue" data-category="dialogue" aria-controls="panel-dialogue" aria-selected="false" tabindex="-1">对话/台词</button>
         <button type="button" class="settings-tab" role="tab" id="tab-behavior" data-category="behavior" aria-controls="panel-behavior" aria-selected="false" tabindex="-1">行为/待机</button>
@@ -33,16 +33,17 @@
             <h2 id="settings-appearance-title">外观/皮肤</h2>
             <button type="button" class="settings-reset settings-reset-group" data-reset-group="appearance">重置本组</button>
           </div>
-          <p class="settings-hint">皮肤和大小会立刻反映在角色上。ZIP 会先预览，确认后才写入。</p>
-          <div id="settings-skins" class="settings-row settings-skins" role="radiogroup" aria-label="角色皮肤"></div>
-          <div class="settings-actions">
-            <button type="button" id="settings-import-skin" class="settings-action">导入图片…</button>
-            <button type="button" id="settings-import-pack" class="settings-action">导入皮肤包（文件夹）…</button>
-            <button type="button" id="settings-import-zip" class="settings-action">导入皮肤包（ZIP）…</button>
-          </div>
-          <div id="settings-zip-drop" class="settings-drop" tabindex="0" role="button" aria-label="拖入 ZIP 皮肤包以预览，或按回车选择文件">
-            <strong>拖入 ZIP 皮肤包</strong>
-            <span>支持 UTF-8 和简体中文文件名。导入前可以预览角色。</span>
+          <h3 class="settings-kicker-title">皮肤</h3>
+          <div id="settings-skins" class="settings-skin-grid" role="radiogroup" aria-label="角色皮肤"></div>
+          <p class="settings-hint">高对比主题下预览图可能保持原色。</p>
+          <button type="button" id="settings-delete-skin" class="settings-action settings-link">删除当前已导入的皮肤</button>
+          <h3 class="settings-kicker-title">导入</h3>
+          <div id="settings-zip-drop" class="settings-drop" data-state="idle" tabindex="0" role="button" aria-label="将 .zip 或皮肤包文件夹拖到此处">
+            <strong id="settings-drop-title">将 .zip 或皮肤包文件夹拖到此处</strong>
+            <span id="settings-drop-detail">一次一个。也可以选择文件。</span>
+            <button type="button" id="settings-import-zip" class="settings-action settings-primary">选择文件…</button>
+            <button type="button" id="settings-import-pack" class="settings-link">选择文件夹…</button>
+            <button type="button" id="settings-import-skin" class="settings-link">导入图片…</button>
           </div>
           <section id="settings-zip-preview" class="settings-card settings-preview" hidden aria-live="polite" aria-label="皮肤包导入预览">
             <h3 id="settings-zip-preview-title">导入预览</h3>
@@ -54,7 +55,21 @@
               <button type="button" id="settings-zip-cancel" class="settings-action">取消</button>
             </div>
           </section>
-          <p id="settings-zip-status" class="settings-status" role="status" aria-live="polite"></p>
+          <h3 class="settings-kicker-title">透明度</h3>
+          <div class="settings-field">
+            <span class="settings-label">透明度
+              <button type="button" class="settings-reset" data-reset-key="opacity" aria-label="重置透明度" title="恢复默认透明度">↺</button>
+            </span>
+            <span id="settings-opacity-value" class="settings-value">100%</span>
+            <input id="settings-opacity" type="range" min="0.35" max="1" step="0.05" value="1" aria-label="角色透明度">
+          </div>
+          <h3 class="settings-kicker-title">窗口外观</h3>
+          <div id="settings-color-scheme" class="settings-chips" role="radiogroup" aria-label="窗口外观">
+            <button type="button" class="settings-chip" role="radio" data-color-scheme="system" aria-checked="true">跟随系统</button>
+            <button type="button" class="settings-chip" role="radio" data-color-scheme="light" aria-checked="false">浅色</button>
+            <button type="button" class="settings-chip" role="radio" data-color-scheme="dark" aria-checked="false">深色</button>
+          </div>
+          <h3 class="settings-kicker-title">大小</h3>
           <div class="settings-field settings-field-plain">
             <span class="settings-label">大小
               <button type="button" class="settings-reset" data-reset-key="sizeLevel" aria-label="重置大小">↺</button>
@@ -70,7 +85,28 @@
             <button type="button" class="settings-reset settings-reset-group" data-reset-group="dialogue">重置本组</button>
           </div>
           <div class="settings-card">
-            <button type="button" id="settings-edit-dialogues" class="settings-action">编辑台词…</button>
+            <div class="dialogue-embed" aria-label="台词编辑">
+              <div class="tabs" role="tablist" aria-label="台词类型">
+                <button type="button" id="speech-tab" role="tab" aria-selected="true" aria-controls="workspace" data-kind="speech">日常台词 <span id="speech-count">0</span></button>
+                <button type="button" id="sleepy-tab" role="tab" aria-selected="false" aria-controls="workspace" data-kind="sleepy" tabindex="-1">收尾台词 <span id="sleepy-count">0</span></button>
+              </div>
+              <p id="category-hint">点击气泡时，按列表顺序说下一句。</p>
+              <section id="workspace" role="tabpanel" aria-labelledby="speech-tab">
+                <div class="list-heading"><strong id="list-title">日常台词</strong><button type="button" id="add" disabled>＋ 新增</button></div>
+                <div id="line-list" role="group" aria-label="选择要编辑的台词"></div>
+                <label id="text-label" for="line-text">第 1 句</label>
+                <textarea id="line-text" aria-describedby="text-hint" disabled></textarea>
+                <div class="text-meta"><span id="text-hint">最多 120 字、4 行</span><output id="length">0 / 120</output></div>
+                <div class="preview-bubble"><span id="preview-text">主人，戳戳我嘛～</span></div>
+              </section>
+              <p id="status" role="status" aria-live="polite"></p>
+              <div class="settings-actions">
+                <button type="button" id="restore" disabled>恢复默认台词</button>
+                <button type="button" id="delete" class="delete" disabled>删除这句</button>
+                <button type="button" id="cancel">放弃草稿</button>
+                <button type="button" id="save" class="settings-primary" disabled>保存并应用</button>
+              </div>
+            </div>
             <div class="settings-field settings-field-plain">
               <span class="settings-label">气泡停留
                 <button type="button" class="settings-reset" data-reset-key="bubbleSeconds" aria-label="重置气泡停留">↺</button>
@@ -121,28 +157,21 @@
               <label class="settings-switch" for="settings-mirror"><input id="settings-mirror" type="checkbox" checked> <span class="settings-switch-ui" aria-hidden="true"></span> 贴左侧时转向</label>
               <button type="button" class="settings-reset" data-reset-key="mirrorOnLeft" aria-label="重置贴左侧转向">↺</button>
             </div>
-            <p class="settings-hint">减少动画在“无障碍”里。重置本组仍会把它一起恢复为默认。</p>
+            <button type="button" id="settings-reset-placement" class="settings-action">回到右下角</button>
           </div>
         </section>
 
-        <section class="settings-panel-page" role="tabpanel" id="panel-accessibility" aria-labelledby="tab-accessibility" data-settings-group="visibility" hidden>
+        <section class="settings-panel-page" role="tabpanel" id="panel-accessibility" aria-labelledby="tab-accessibility" data-settings-group="accessibility" hidden>
           <div class="settings-section-head">
             <h2 id="settings-accessibility-title">无障碍</h2>
-            <button type="button" class="settings-reset settings-reset-group" data-reset-group="visibility">重置透明度</button>
+            <button type="button" class="settings-reset settings-reset-group" data-reset-group="accessibility">重置本组</button>
           </div>
           <div class="settings-card">
             <div class="settings-toggle-row">
               <label class="settings-switch" for="settings-reduced"><input id="settings-reduced" type="checkbox"> <span class="settings-switch-ui" aria-hidden="true"></span> 减少动画</label>
               <button type="button" class="settings-reset" data-reset-key="reducedMotion" aria-label="重置减少动画">↺</button>
             </div>
-            <div class="settings-field">
-              <span class="settings-label">透明度
-                <button type="button" class="settings-reset" data-reset-key="opacity" aria-label="重置透明度">↺</button>
-              </span>
-              <span id="settings-opacity-value" class="settings-value">100%</span>
-              <input id="settings-opacity" type="range" min="0.35" max="1" step="0.05" value="1" aria-label="角色透明度">
-            </div>
-            <p class="settings-hint">本窗口跟随系统深浅色，并使用系统高对比颜色。只用键盘即可切换左侧分类：上下方向键移动，Tab 在窗口内循环。导入的皮肤图仍是原图像素，高对比主题不能重新上色。</p>
+            <p class="settings-hint">Ctrl+, 打开设置。Esc 先取消未导入的预览或未保存台词，否则关闭。上下方向键切换分类。角色朗读将在后续版本提供，默认关闭；与读屏同时运行时会自动静音。</p>
           </div>
         </section>
 
@@ -156,6 +185,8 @@
               <button type="button" id="settings-import-preferences" class="settings-action">导入偏好…</button>
             </div>
             <p class="settings-hint">只导出设置与皮肤清单，不含图片、缩略图或自定义台词。</p>
+            <button type="button" id="settings-reset-all" class="settings-action settings-primary">恢复默认</button>
+            <p>不会删除自定义台词、已导入皮肤，也不会移动当前位置。</p>
           </div>
         </section>
 
@@ -166,16 +197,20 @@
           <div class="settings-card">
             <p id="settings-display-version" class="settings-version">Codex-Pet-V1.4</p>
             <p id="settings-version">内部版本 3.4.0</p>
-            <p class="settings-hint">诊断默认只读。在插件目录执行 <span class="settings-code">npm run diagnose</span>。需要修复时使用 <span class="settings-code">node tools/diagnose.cjs --fix --yes</span>，修复前会先备份。</p>
-            <p class="settings-hint">托盘图标和角色右键菜单打开的是同一个设置窗口。</p>
+            <p id="settings-electron">Electron</p>
+            <p id="settings-data-dir">数据目录</p>
+            <p id="settings-work-dir">工作目录</p>
+            <button type="button" id="settings-copy-diagnostics" class="settings-action">复制诊断信息</button>
+            <p class="settings-hint">角色朗读将在后续版本提供，默认关闭；与读屏同时运行时会自动静音。</p>
+            <p class="settings-hint">检查更新将在后续版本提供，默认关闭，检查前会说明隐私。</p>
           </div>
-          <footer class="settings-footer">
-            <button type="button" id="settings-reset-all" class="settings-action settings-primary">恢复默认</button>
-            <p>不会删除自定义台词、已导入皮肤，也不会移动当前位置。</p>
-          </footer>
         </section>
       </div>
     </div>
+    <p id="settings-live" class="settings-live" role="status" aria-live="polite" aria-atomic="true"></p>
+    <p id="settings-live-assertive" class="settings-live" role="alert" aria-live="assertive"></p>
   </div>
+  <script src="dialogue-data.js"></script>
+  <script type="module" src="dialogue-editor.js"></script>
 </body>
 </html>

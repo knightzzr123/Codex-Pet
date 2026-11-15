@@ -195,7 +195,7 @@ test('主进程接入皮肤包导入、同窗口多角色切换与单实例锁',
   assert.match(html, /id="settings-import-pack"/);
   assert.match(html, /id="settings-import-zip"/);
   assert.match(html, /id="settings-zip-drop"/);
-  assert.match(main, /extensions: \['zip'\]/);
+  assert.match(main, /extensions: \['zip', 'png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'\]/);
   assert.match(preload, /importSkinPack/);
   assert.match(preload, /previewZip/);
   assert.match(renderer, /settings-import-pack/);

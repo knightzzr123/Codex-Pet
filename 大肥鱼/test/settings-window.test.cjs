@@ -76,11 +76,12 @@ test('已有设置窗口时只聚焦，不新建', () => {
   assert.equal(destroyed.created, true);
 });
 
-test('设置窗口打开后聚焦关闭按钮，Esc 请求关闭，Tab 在窗口内循环', () => {
+test('设置窗口打开后聚焦当前分类，Esc 请求关闭，Tab 在窗口内循环', () => {
   const f = fixture();
   const close = f.get('settings-close');
   const action = f.get('settings-import-skin');
-  assert.equal(close.focused, true);
+  assert.equal(f.get('tab-appearance').focused, true);
+  assert.equal(close.focused, false);
   f.get('settings-panel').focusables = [close, action];
   close.focus();
   f.get('settings-panel').emit('keydown', { key: 'Tab', shiftKey: true });
@@ -116,7 +117,8 @@ test('HTML 有六个分类、读屏名称、拖拽区和导入前预览', () => 
     assert.match(html, new RegExp(label));
   }
   assert.match(html, /role="dialog"/);
-  assert.match(html, /aria-modal="true"/);
+  assert.doesNotMatch(html, /aria-modal="true"/);
+  assert.match(html, /aria-orientation="vertical"/);
   assert.match(html, /aria-labelledby="settings-title"/);
   assert.match(html, /id="settings-zip-drop"/);
   assert.match(html, /id="settings-zip-preview"/);
