@@ -193,8 +193,9 @@ function createSkinPackSession(options = {}) {
     if (!record.preview || !record.dir || !record.id) return fail('TOKEN_INVALID', '请先预览这个皮肤包，再确认导入。');
     let again;
     try { again = library.identifyDirectory(record.dir); }
-    catch {
+    catch (error) {
       drop(token);
+      if (typeof error.code === 'string' && error.code.startsWith('ZIP_')) return fail(error.code, error.message);
       return fail('PACK_CHANGED');
     }
     if (again.id !== record.id) {
@@ -208,10 +209,12 @@ function createSkinPackSession(options = {}) {
       if (record.kind === 'directory') {
         const snap = path.join(library.directory, `.unzip-${process.pid}-${randomUUID()}`);
         fs.mkdirSync(library.directory, { recursive: true });
-        fs.cpSync(record.dir, snap, { recursive: true, dereference: false });
         record.unzipRoot = snap;
         record.ownsDir = true;
-        importDir = findManifestDirectory(snap);
+        // Copy only manifest-referenced files; symlinks and unreferenced large
+        // files are never written into the snapshot.
+        library.copyReferencedDirectory(record.dir, snap);
+        importDir = snap;
         const snapId = library.identifyDirectory(importDir);
         if (snapId.id !== record.id) {
           drop(token);

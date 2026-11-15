@@ -108,6 +108,7 @@ function sessionFor(root, extras = {}) {
 }
 
 function unzipNames(library) {
+  if (!fs.existsSync(library.directory)) return [];
   return fs.readdirSync(library.directory).filter(name => name.startsWith('.unzip-'));
 }
 
@@ -383,4 +384,57 @@ test('超出 4 个有效 token 时淘汰最旧并清理临时目录', async t =>
   }
   assert.equal((await session.preview(first.token, 1)).code, 'TOKEN_INVALID');
   assert.deepEqual(unzipNames(library), []);
+});
+
+test('文件夹导入只快照 manifest 引用的文件，不复制超大或未引用文件', async t => {
+  const root = temporary(t);
+  const { library, session } = sessionFor(root);
+  const directory = writePack(root, 31, '只复制引用', { id: 'copy-pack' });
+  fs.writeFileSync(path.join(directory, 'notes.txt'), 'not referenced');
+  const huge = path.join(directory, 'unused.bin');
+  fs.writeFileSync(huge, '');
+  fs.truncateSync(huge, 210 * 1024 * 1024);
+  fs.mkdirSync(path.join(directory, 'nested'));
+  fs.symlinkSync(path.join(directory, 'whale.png'), path.join(directory, 'nested', 'link.png'));
+  const registered = session.register(directory, 1);
+  const preview = await session.preview(registered.token, 1);
+  assert.equal(preview.ok, true, preview.error);
+  const committed = await session.commit(registered.token, 1);
+  assert.equal(committed.ok, true, committed.error);
+  const installed = library.list()[0];
+  assert.ok(installed);
+  assert.deepEqual(fs.readdirSync(installed.directory).sort(), ['c-0-whale.png', 'manifest.json']);
+  assert.equal(fs.existsSync(path.join(installed.directory, 'unused.bin')), false);
+  assert.equal(fs.existsSync(path.join(installed.directory, 'notes.txt')), false);
+  assert.deepEqual(unzipNames(library), []);
+});
+
+test('文件夹导入在预览后出现符号链接时拒绝并清理快照', async t => {
+  const root = temporary(t);
+  const { library, session } = sessionFor(root);
+  const directory = writePack(root, 32, '链接包', { id: 'link-pack' });
+  const image = path.join(directory, 'whale.png');
+  const real = path.join(directory, 'real.png');
+  const registered = session.register(directory, 1);
+  assert.equal((await session.preview(registered.token, 1)).ok, true);
+  fs.renameSync(image, real);
+  fs.symlinkSync(real, image);
+  const committed = await session.commit(registered.token, 1);
+  assert.equal(committed.ok, false);
+  assert.equal(committed.code, 'ZIP_SYMLINK');
+  assert.match(committed.error, /符号链接/);
+  assert.equal(library.list().length, 0);
+  assert.deepEqual(unzipNames(library), []);
+});
+
+test('文件夹导入的单图 20 MB 上限仍然生效', async t => {
+  const root = temporary(t);
+  const { library, session } = sessionFor(root);
+  const directory = writePack(root, 33, '大图包', { id: 'big-pack' });
+  fs.writeFileSync(path.join(directory, 'whale.png'), Buffer.alloc(20 * 1024 * 1024 + 1));
+  const registered = session.register(directory, 1);
+  const preview = await session.preview(registered.token, 1);
+  assert.equal(preview.ok, false);
+  assert.match(preview.error, /20 MB|大小/);
+  assert.equal(library.list().length, 0);
 });

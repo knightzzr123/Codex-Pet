@@ -230,18 +230,38 @@ function readPackFile(root, relative, maxBytes, label) {
   const resolved = path.resolve(root, relative);
   if (resolved !== root && !resolved.startsWith(root + path.sep)) throw new Error(`${label}不能跳出皮肤包目录。`);
   const stat = fs.lstatSync(resolved);
-  if (stat.isSymbolicLink() || !stat.isFile()) throw new Error(`${label}需要是普通文件。`);
+  if (stat.isSymbolicLink()) {
+    const error = new Error(`${label}不能是符号链接或目录联接。`);
+    error.code = 'ZIP_SYMLINK';
+    throw error;
+  }
+  if (!stat.isFile()) throw new Error(`${label}需要是普通文件。`);
   if (stat.size > maxBytes) throw new Error(`${label}不能超过 ${Math.round(maxBytes / 1024 / 1024)} MB。`);
   const bytes = fs.readFileSync(resolved);
   if (bytes.length > maxBytes) throw new Error(`${label}不能超过 ${Math.round(maxBytes / 1024 / 1024)} MB。`);
   return bytes;
 }
 
+function writePackFile(root, relative, bytes) {
+  const target = path.resolve(root, relative);
+  if (target !== root && !target.startsWith(root + path.sep)) throw new Error('皮肤包文件不能跳出隔离目录。');
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, bytes);
+}
+
+function parseManifestBytes(bytes) {
+  let parsed;
+  try { parsed = JSON.parse(bytes.toString('utf8').replace(/^\uFEFF/, '')); }
+  catch { throw new Error('manifest.json 无法解析或已损坏。'); }
+  return normalizeManifest(parsed);
+}
+
 class SkinPackLibrary {
-  constructor(dataDirectory) {
+  constructor(dataDirectory, options = {}) {
     this.directory = path.join(dataDirectory, 'skin-packs');
     this.indexFile = path.join(this.directory, 'index.json');
     this.entries = [];
+    this.onDiagnostic = typeof options.onDiagnostic === 'function' ? options.onDiagnostic : null;
     sweepTransientDirs(this.directory, error => {
       try { console.error('清理皮肤包临时目录失败：' + error.message); } catch { /* logging must not block startup */ }
     });
@@ -344,6 +364,44 @@ class SkinPackLibrary {
       if (!names.has(candidate.normalize('NFC'))) return candidate;
     }
     throw new Error('同名皮肤包过多，无法生成新的显示名称。');
+  }
+
+  // Folder imports are snapshotted before installation to close the
+  // preview/commit race. Copy only the files the manifest references: never
+  // `cpSync` a user folder wholesale, because unreferenced giant files or
+  // symlinks/junctions must not be pulled into the data directory.
+  copyReferencedDirectory(sourceDirectory, targetDirectory) {
+    const source = path.resolve(sourceDirectory);
+    const target = path.resolve(targetDirectory);
+    if (target === source || target.startsWith(source + path.sep)) {
+      throw new Error('皮肤包临时目录不能位于源文件夹内。');
+    }
+    const manifestBytes = readPackFile(source, 'manifest.json', SKIN_PACK_LIMITS.maxManifestBytes, 'manifest.json');
+    const manifest = parseManifestBytes(manifestBytes);
+    fs.mkdirSync(target, { recursive: true });
+    writePackFile(target, 'manifest.json', manifestBytes);
+    let totalBytes = 0;
+    for (const character of manifest.characters) {
+      const imageBytes = readPackFile(source, character.image, SKIN_PACK_LIMITS.maxImageBytes, `角色“${character.name}”的图片`);
+      totalBytes += imageBytes.length;
+      if (totalBytes > SKIN_PACK_LIMITS.maxTotalBytes) {
+        const error = new Error('皮肤包总大小超过 200 MB。');
+        error.code = 'ZIP_LIMIT';
+        throw error;
+      }
+      writePackFile(target, character.image, imageBytes);
+      if (character.thumbnail) {
+        const thumbnailBytes = readPackFile(source, character.thumbnail, THUMBNAIL_SPEC.maxBytes, `角色“${character.name}”的缩略图`);
+        totalBytes += thumbnailBytes.length;
+        if (totalBytes > SKIN_PACK_LIMITS.maxTotalBytes) {
+          const error = new Error('皮肤包总大小超过 200 MB。');
+          error.code = 'ZIP_LIMIT';
+          throw error;
+        }
+        writePackFile(target, character.thumbnail, thumbnailBytes);
+      }
+    }
+    return manifest;
   }
 
   async importDirectory(sourceDirectory, validateImage = async () => {}) {
