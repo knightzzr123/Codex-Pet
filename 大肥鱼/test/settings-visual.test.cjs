@@ -162,6 +162,11 @@ test('V2 卡片主行只放名称，来源进小号副行，完整名留在 titl
   });
   const cards = f.get('settings-skins').children;
   assert.equal(cards.length, 4);
+  // The stored default skin keeps the "默认 · " prefix in the data model, but
+  // the card's main line shows the bare name and the origin line says 默认.
+  assert.equal(cards[0].title, '鲸鱼娘');
+  assert.equal(cards[0].children.find(child => child.className === 'settings-skin-name').textContent, '鲸鱼娘');
+  assert.equal(cards[1].title, '紫角玫瑰 · 半身');
   assert.deepEqual(cards.map(card => card.children.find(child => child.className === 'settings-skin-origin')?.textContent),
     ['默认', '内置', '导入', '导入']);
   for (const card of cards) {
@@ -179,7 +184,9 @@ test('V2 卡片主行只放名称，来源进小号副行，完整名留在 titl
   assert.equal(cards[1].children[0].className, 'settings-chip-thumb');
   assert.equal(cards[1].children[0].getAttribute('aria-hidden'), 'true');
   assert.match(script, /const name = document\.createElement\('span'\);\s*name\.className = 'settings-skin-name';/);
-  assert.match(script, /name\.textContent = skin\.name;/);
+  assert.match(script, /name\.textContent = label;/);
+  assert.match(script, /function skinLabel\(skin\)/);
+  assert.match(script, /name\.replace\(\/\^默认/);
 });
 
 test('V3 删除重复区块标题，控件行用 label/for 与 radiogroup 关联', () => {

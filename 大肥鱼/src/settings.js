@@ -21,6 +21,14 @@ function applyTheme() {
 
 // V2: the card's primary line is the bare skin name; where the skin comes from
 // moves to a small secondary line ("默认" / "内置" / "导入").
+function skinLabel(skin) {
+  if (!skin) return '';
+  const name = String(skin.name || '');
+  // The built-in default is stored as "默认 · 鲸鱼娘"; the origin line already
+  // says 默认, so the card's main line shows the bare name.
+  return skin.id === 'default' ? name.replace(/^默认\s*[·・]\s*/, '') : name;
+}
+
 function skinOrigin(skin) {
   if (!skin) return '';
   if (skin.id === 'default') return '默认';
@@ -51,13 +59,14 @@ function syncSettingsControls() {
     skinBox.replaceChildren(...skins.map(skin => {
       const button = document.createElement('button');
       const active = state.skin?.id === skin.id;
+      const label = skinLabel(skin);
       button.type = 'button';
       button.className = `settings-skin-card${active ? ' is-active' : ''}`;
-      button.title = skin.name;
+      button.title = label;
       button.setAttribute?.('role', 'radio');
       button.setAttribute?.('aria-checked', String(active));
       button.setAttribute?.('aria-pressed', String(active));
-      button.setAttribute?.('aria-label', `${active ? '当前角色' : '切换到'}：${skin.name}`);
+      button.setAttribute?.('aria-label', `${active ? '当前角色' : '切换到'}：${label}`);
       // V2: the card shows one clamped name line plus a small origin line, so
       // only whole names wrap; the full name stays in title/aria-label.
       if (typeof button.append === 'function') {
@@ -71,12 +80,12 @@ function syncSettingsControls() {
         }
         const name = document.createElement('span');
         name.className = 'settings-skin-name';
-        name.textContent = skin.name;
+        name.textContent = label;
         const origin = document.createElement('span');
         origin.className = 'settings-skin-origin';
         origin.textContent = skinOrigin(skin);
         button.append(name, origin);
-      } else button.textContent = skin.name;
+      } else button.textContent = label;
       button.addEventListener('click', () => window.settingsAPI?.setSkin?.(skin.id));
       return button;
     }));
