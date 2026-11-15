@@ -2,7 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { createHash, randomUUID } = require('node:crypto');
 const { imageFormat } = require('./skins.cjs');
-const { readZipFile, writeEntries } = require('./zip-reader.cjs');
+const { inspectZipFile, writeEntries } = require('./zip-reader.cjs');
 const {
   MANIFEST_VERSION, THUMBNAIL_SPEC, SKIN_PACK_LIMITS, assertManifestVersion, assertSlug, optionalText
 } = require('./manifests.cjs');
@@ -135,29 +135,68 @@ function packContentId(manifest, sources) {
   return digest.digest('hex');
 }
 
-function sweepTransientDirs(directory) {
+function sweepTransientDirs(directory, log = () => {}) {
   if (!directory || !fs.existsSync(directory)) return [];
   const removed = [];
-  for (const name of fs.readdirSync(directory)) {
-    if (!/^\.(staging|unzip)-/.test(name)) continue;
-    fs.rmSync(path.join(directory, name), { recursive: true, force: true });
-    removed.push(name);
+  let names = [];
+  try { names = fs.readdirSync(directory); }
+  catch (error) { log(error); return removed; }
+  for (const name of names) {
+    if (!/^\.staging(-zip)?-/.test(name) && !/^\.unzip-/.test(name)) continue;
+    try {
+      fs.rmSync(path.join(directory, name), { recursive: true, force: true });
+      removed.push(name);
+    } catch (error) { log(error); }
   }
   return removed;
 }
 
+function assertJsonDepth(text, maxDepth = 32) {
+  let depth = 0;
+  let inString = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (inString) {
+      if (char === '\\') { index += 1; continue; }
+      if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') inString = true;
+    else if (char === '{' || char === '[') {
+      depth += 1;
+      if (depth > maxDepth) throw new Error('manifest.json 嵌套过深。');
+    } else if (char === '}' || char === ']') depth = Math.max(0, depth - 1);
+  }
+}
+
 function findManifestDirectory(root) {
+  const skip = new Set(['__MACOSX', '.DS_Store', 'Thumbs.db']);
+  const top = fs.readdirSync(root).filter(name => !skip.has(name));
   const found = [];
-  const stack = [root];
-  while (stack.length) {
-    const dir = stack.pop();
-    for (const name of fs.readdirSync(dir)) {
-      if (name === '__MACOSX' || name === '.DS_Store') continue;
-      const full = path.join(dir, name);
-      const stat = fs.lstatSync(full);
-      if (stat.isSymbolicLink()) throw new Error('皮肤包里包含符号链接。');
-      if (stat.isDirectory()) stack.push(full);
-      else if (name === 'manifest.json' && stat.isFile()) found.push(dir);
+  if (top.includes('manifest.json')) {
+    const full = path.join(root, 'manifest.json');
+    const stat = fs.lstatSync(full);
+    if (stat.isSymbolicLink()) throw new Error('皮肤包里包含符号链接。');
+    if (stat.isFile()) found.push(root);
+  }
+  for (const name of top) {
+    const full = path.join(root, name);
+    const stat = fs.lstatSync(full);
+    if (stat.isSymbolicLink()) throw new Error('皮肤包里包含符号链接。');
+    if (!stat.isDirectory()) continue;
+    const nested = path.join(full, 'manifest.json');
+    if (fs.existsSync(nested) && fs.lstatSync(nested).isFile()) found.push(full);
+    for (const child of fs.readdirSync(full)) {
+      const childPath = path.join(full, child);
+      if (child === 'manifest.json' || skip.has(child)) continue;
+      let childStat;
+      try { childStat = fs.lstatSync(childPath); } catch { continue; }
+      if (!childStat.isDirectory()) continue;
+      if (fs.existsSync(path.join(childPath, 'manifest.json'))) {
+        const error = new Error('manifest.json 只能位于压缩包根目录或唯一一层顶层目录。');
+        error.code = 'ZIP_MANIFEST_LOCATION';
+        throw error;
+      }
     }
   }
   if (!found.length) throw new Error('皮肤包缺少 manifest.json。');
@@ -198,7 +237,9 @@ class SkinPackLibrary {
     this.directory = path.join(dataDirectory, 'skin-packs');
     this.indexFile = path.join(this.directory, 'index.json');
     this.entries = [];
-    sweepTransientDirs(this.directory);
+    sweepTransientDirs(this.directory, error => {
+      try { console.error('清理皮肤包临时目录失败：' + error.message); } catch { /* logging must not block startup */ }
+    });
     try {
       const saved = JSON.parse(fs.readFileSync(this.indexFile, 'utf8').replace(/^\uFEFF/, ''));
       if (saved.version === PACKS_INDEX_VERSION && Array.isArray(saved.packs)) {
@@ -395,7 +436,8 @@ class SkinPackLibrary {
       sources.push({ character, imageBytes, thumbnailBytes });
     }
     const id = packContentId(manifest, sources);
-    const needsConfirm = Boolean(this.get(id)) || (Boolean(manifest.id) && this.sourceIds().includes(manifest.id));
+    const sourceKey = typeof manifest.id === 'string' ? manifest.id.toLowerCase() : '';
+    const needsConfirm = Boolean(this.get(id)) || (Boolean(sourceKey) && this.sourceIds().some(item => item.toLowerCase() === sourceKey));
     return { id, manifest, sources, needsConfirm };
   }
 
@@ -415,33 +457,72 @@ class SkinPackLibrary {
     };
   }
 
-  async withUnzipped(zipPath, visit) {
+  filesForManifest(files) {
+    const manifestFile = files.find(file => file.name === 'manifest.json');
+    if (!manifestFile) throw new Error('皮肤包缺少 manifest.json。');
+    const text = manifestFile.bytes.toString('utf8').replace(/^\uFEFF/, '');
+    assertJsonDepth(text);
+    let parsed;
+    try { parsed = JSON.parse(text); }
+    catch { throw new Error('manifest.json 无法解析或已损坏。'); }
+    const manifest = normalizeManifest(parsed);
+    const allowed = new Set(['manifest.json']);
+    for (const character of manifest.characters) {
+      allowed.add(character.image);
+      if (character.thumbnail) allowed.add(character.thumbnail);
+    }
+    const kept = files.filter(file => allowed.has(file.name));
+    if (kept.length !== allowed.size) {
+      const missing = [...allowed].filter(name => !kept.some(file => file.name === name));
+      throw new Error(`皮肤包缺少文件：${missing[0]}`);
+    }
+    return { manifest, files: kept };
+  }
+
+  async inspectZip(zipPath) {
+    const inspected = await inspectZipFile(zipPath);
+    const selected = this.filesForManifest(inspected.files);
+    const temp = path.join(this.directory, `.staging-zip-${process.pid}-${randomUUID()}`);
     fs.mkdirSync(this.directory, { recursive: true });
-    const temp = path.join(this.directory, `.unzip-${process.pid}-${randomUUID()}`);
     fs.mkdirSync(temp);
     try {
-      const entries = await readZipFile(zipPath);
-      writeEntries(temp, entries);
-      return await visit(findManifestDirectory(temp));
+      writeEntries(temp, selected.files);
+      const identified = this.identifyDirectory(temp);
+      identified.files = selected.files;
+      return identified;
     } finally {
-      fs.rmSync(temp, { recursive: true, force: true });
+      try { fs.rmSync(temp, { recursive: true, force: true }); }
+      catch (error) { try { console.error('清理皮肤包临时目录失败：' + error.message); } catch { /* ignore */ } }
     }
   }
 
   previewZip(zipPath) {
-    return this.withUnzipped(zipPath, directory => this.previewFromIdentified(this.identifyDirectory(directory)));
+    return this.inspectZip(zipPath).then(identified => this.previewFromIdentified(identified));
   }
 
-  async importZip(zipPath, validateImage = async () => {}, { confirmSame = false } = {}) {
-    return this.withUnzipped(zipPath, async directory => {
-      const identified = this.identifyDirectory(directory);
+  async importPrepared(files, validateImage = async () => {}, { confirmSame = false } = {}) {
+    const selected = this.filesForManifest(files);
+    fs.mkdirSync(this.directory, { recursive: true });
+    const temp = path.join(this.directory, `.staging-zip-${process.pid}-${randomUUID()}`);
+    fs.mkdirSync(temp);
+    try {
+      writeEntries(temp, selected.files);
+      const identified = this.identifyDirectory(temp);
       if (identified.needsConfirm && !confirmSame) {
         const error = new Error(`已存在皮肤包“${identified.manifest.name}”。取消则不会做任何更改；确认后才会继续导入。`);
         error.code = 'PACK_CONFIRM';
         throw error;
       }
-      return this.importDirectory(directory, validateImage);
-    });
+      return await this.importDirectory(temp, validateImage);
+    } finally {
+      try { fs.rmSync(temp, { recursive: true, force: true }); }
+      catch (error) { try { console.error('清理皮肤包临时目录失败：' + error.message); } catch { /* ignore */ } }
+    }
+  }
+
+  async importZip(zipPath, validateImage = async () => {}, { confirmSame = false } = {}) {
+    const inspected = await inspectZipFile(zipPath);
+    return this.importPrepared(inspected.files, validateImage, { confirmSame });
   }
 }
 

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, Tray, dialog, ipcMain, screen, nativeImage } = require('electron');
+const { app, BrowserWindow, Menu, dialog, ipcMain, screen, nativeImage } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFile, spawn } = require('node:child_process');
@@ -27,7 +27,8 @@ const { createCodexSessionProbe } = require('./codex-session-probe.cjs');
 const { createSessionStateTracker, sessionPresentation } = require('./session-state.cjs');
 const { VIEWPORT, inputRegions } = require('./layout.cjs');
 const { openSettingsWindow, getSettingsWindow } = require('./settings-window.cjs');
-const { noteDisplay, relocateToVisibleDisplay } = require('./display-layout.cjs');
+const { noteDisplay, relocateToVisibleDisplay, planScreenEvent, nearestDisplay, SCREEN_EVENT_DELAY_MS } = require('./display-layout.cjs');
+const { createZipGrants } = require('./zip-grant.cjs');
 const { version: APP_VERSION, DISPLAY_VERSION } = require('./version-info.cjs');
 const {
   interpolateBounds, interpolateZoom, boundsDiffer, zoomDiffer, settleDurationMs, createSettlePlayer
@@ -45,7 +46,11 @@ app.setName('大肥鱼 · Codex Pet');
 app.setPath('userData', smokeTest ? path.join(work, 'smoke-data') : dataDir);
 if (!app.requestSingleInstanceLock()) { app.quit(); }
 else {
-  let win, tray, interval, scopeMonitor, pluginInterval, sessionTimer, sessionTracker, functionMenu;
+  let win, interval, scopeMonitor, pluginInterval, sessionTimer, sessionTracker, functionMenu;
+  const zipGrants = createZipGrants();
+  const zipPrepared = new Map();
+  let screenTimer = null;
+  let refreshScalePending = false;
   let displayMemory = { displayId: null, scaleFactor: null, crossed: false, scaleChanged: false };
   let forceDisplayLayout = false;
   let scope = { active: false };
@@ -514,53 +519,64 @@ else {
     return win && !win.isDestroyed() ? win : undefined;
   }
   function zipFailure(error) {
-    if (error?.code === 'PACK_CONFIRM' || error?.code === 'ZIP_REJECTED') return error.message;
-    if (error?.code) return '无法读取或保存皮肤包，请确认文件可读、数据目录可写。';
-    return error?.message || '无法导入皮肤包。';
+    if (!error) return '无法导入皮肤包。';
+    if (error.code === 'PACK_CONFIRM' || (typeof error.code === 'string' && error.code.startsWith('ZIP_'))) return error.message;
+    if (error.code) return '无法读取或保存皮肤包，请确认文件可读、数据目录可写。';
+    return error.message || '无法导入皮肤包。';
   }
-  function assertZipSelection(filePath) {
-    if (typeof filePath !== 'string' || !filePath.toLowerCase().endsWith('.zip')) throw new Error('请选择 .zip 皮肤包。');
+  function assertSettingsSender(event) {
+    const settingsWindow = getSettingsWindow();
+    const owner = dialogOwner(event);
+    if (!settingsWindow || !owner || owner !== settingsWindow) {
+      const error = new Error('只有设置窗口可以导入皮肤包。');
+      error.code = 'ZIP_SENDER';
+      throw error;
+    }
+  }
+  function rememberZip(filePath) {
     const stat = fs.lstatSync(filePath);
-    if (stat.isSymbolicLink() || !stat.isFile()) throw new Error('只能导入普通 ZIP 文件。');
-    return filePath;
+    if (stat.isSymbolicLink() || !stat.isFile()) {
+      const error = new Error('只能导入普通 ZIP 文件。');
+      error.code = 'ZIP_FORMAT';
+      throw error;
+    }
+    return zipGrants.grant(filePath);
   }
   async function chooseZipFile(event) {
+    assertSettingsSender(event);
     const result = await dialog.showOpenDialog(dialogOwner(event), {
       title: '导入 ZIP 皮肤包', buttonLabel: '预览', properties: ['openFile'],
       filters: [{ name: 'ZIP 皮肤包', extensions: ['zip'] }]
     });
-    if (result.canceled || !result.filePaths[0]) return { canceled: true, filePath: '' };
-    return { canceled: false, filePath: result.filePaths[0] };
+    if (result.canceled || !result.filePaths[0]) return { canceled: true };
+    return { canceled: false, token: rememberZip(result.filePaths[0]) };
   }
-  async function importZipSelection(filePath, confirmSame) {
-    assertZipSelection(filePath);
-    const pack = await skinPacks.importZip(filePath, validateSkinImage, { confirmSame: confirmSame === true });
+  async function importGrantedZip(token, confirmSame) {
+    const files = zipPrepared.get(token);
+    if (!files) {
+      const error = new Error('请先预览这个皮肤包，再确认导入。');
+      error.code = 'ZIP_UNREGISTERED';
+      throw error;
+    }
+    const pack = await skinPacks.importPrepared(files, validateSkinImage, { confirmSame: confirmSame === true });
+    zipPrepared.delete(token);
+    zipGrants.forget(token);
     if (!pack?.characters?.length) throw new Error('皮肤包没有可用角色。');
     setSkin(packCharacterId(pack.id, pack.characters[0].id));
     return { id: pack.id, name: pack.name, characterCount: pack.characters.length };
   }
-  function openSettingsPanel() {
+  function openSettingsPanel(groupId) {
     cancelDrag();
-    openSettingsWindow({ anchor: win, onClosed: () => publish() });
+    openSettingsWindow({
+      anchor: win,
+      groupId: typeof groupId === 'string' ? groupId : undefined,
+      onClosed: () => {
+        zipPrepared.clear();
+        publish();
+        if (win && !win.isDestroyed()) win.focus();
+      }
+    });
     publish();
-  }
-  function ensureTray() {
-    if (tray) return;
-    try {
-      const image = nativeImage.createFromPath(path.join(project, 'assets', 'icon.png'));
-      const icon = image.isEmpty?.() ? image : image.resize({ width: 16, height: 16 });
-      tray = new Tray(icon);
-      tray.setToolTip('大肥鱼');
-      tray.setContextMenu(Menu.buildFromTemplate([
-        { label: '打开设置…', click: openSettingsPanel },
-        { label: '回到右下角', click: resetPlacement },
-        { type: 'separator' },
-        { label: '退出', click: () => app.quit() }
-      ]));
-      tray.on('click', openSettingsPanel);
-    } catch (error) {
-      logLifecycle({ event: 'tray-unavailable', detail: error.message });
-    }
   }
   function buildFunctionMenu() {
     const importedSkins = skins.list();
@@ -691,7 +707,7 @@ else {
   function positionWindow() {
     if (!win || win.isDestroyed() || !scope.rect) return false;
     const area = currentArea();
-    const refreshScale = forceDisplayLayout || displayMemory.crossed || displayMemory.scaleChanged;
+    const refreshScale = refreshScalePending || displayMemory.crossed || displayMemory.scaleChanged;
     const layout = scopedBounds(area, scaleForLevel(preferences.sizeLevel), preferences.placement);
     if (!layout) {
       cancelSettle();
@@ -726,20 +742,45 @@ else {
       displayId: noted.displayId,
       scaleFactor: noted.scaleFactor,
       crossed: noted.crossed,
-      scaleChanged: forceDisplayLayout || noted.scaleChanged
+      scaleChanged: noted.scaleChanged
     };
     return area;
   }
-  function onScreenTopology(kind) {
+  function applyScreenEvent(payload) {
     if (!win || win.isDestroyed()) return;
-    forceDisplayLayout = true;
+    const plan = planScreenEvent({
+      kind: payload.kind,
+      changedMetrics: payload.changedMetrics,
+      dragging: Boolean(drag),
+      scopeValid: Boolean(scope.rect)
+    });
+    if (plan.ignore) return;
+    if (plan.cancelDrag) cancelDrag();
+    if (plan.cancelSettle) cancelSettle();
+    if (plan.hide || (payload.kind === 'removed' && !scope.rect)) {
+      win.hide();
+      return;
+    }
+    refreshScalePending = Boolean(payload.changedMetrics?.includes('scaleFactor') || payload.kind === 'removed');
     try { positionWindow(); }
-    finally { forceDisplayLayout = false; }
-    if (kind !== 'removed' || !win.isVisible()) return;
+    finally { refreshScalePending = false; }
+    if (!plan.relocate || !win.isVisible()) return;
+    const bounds = win.getBounds();
     let displays = [];
     try { displays = screen.getAllDisplays(); } catch { displays = []; }
-    const relocated = relocateToVisibleDisplay(win.getBounds(), displays);
+    const center = { x: Math.round(bounds.x + bounds.width / 2), y: Math.round(bounds.y + bounds.height / 2) };
+    let nearest = null;
+    try { nearest = screen.getDisplayNearest(center); } catch { nearest = nearestDisplay(bounds, displays); }
+    const relocated = relocateToVisibleDisplay(bounds, displays, nearest);
     if (relocated) win.setBounds({ x: relocated.x, y: relocated.y, width: relocated.width, height: relocated.height });
+  }
+  function scheduleScreenEvent(kind, changedMetrics) {
+    if (screenTimer) clearTimeout(screenTimer);
+    const payload = { kind, changedMetrics };
+    screenTimer = setTimeout(() => {
+      screenTimer = null;
+      applyScreenEvent(payload);
+    }, SCREEN_EVENT_DELAY_MS);
   }
   let scopeVisibility;
   function ensureScopeVisibility() {
@@ -1304,6 +1345,12 @@ else {
     updateInputRegion();
     win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     win.webContents.on('will-navigate', event => event.preventDefault());
+    win.webContents.on('before-input-event', (event, input) => {
+      if (input.type === 'keyDown' && input.control && !input.alt && !input.meta && input.key === ',') {
+        event.preventDefault();
+        openSettingsPanel();
+      }
+    });
     publish();
     ipcMain.handle('pet:state', () => state);
     ipcMain.handle('pet:refresh', () => refresh());
@@ -1316,18 +1363,30 @@ else {
       if (owner && owner !== win && !owner.isDestroyed()) owner.close();
     });
     ipcMain.handle('settings:choose-zip', event => chooseZipFile(event));
-    ipcMain.handle('settings:preview-zip', async (_event, filePath) => {
+    ipcMain.handle('settings:register-drop', (event, filePath) => {
       try {
-        assertZipSelection(filePath);
-        return await skinPacks.previewZip(filePath);
+        assertSettingsSender(event);
+        return { token: rememberZip(filePath) };
+      } catch (error) {
+        return { ok: false, error: zipFailure(error), code: error.code || 'ZIP_UNREGISTERED' };
+      }
+    });
+    ipcMain.handle('settings:preview-zip', async (event, token) => {
+      try {
+        assertSettingsSender(event);
+        const filePath = zipGrants.resolve(token);
+        const identified = await skinPacks.inspectZip(filePath);
+        zipPrepared.set(token, identified.files);
+        return skinPacks.previewFromIdentified(identified);
       } catch (error) {
         return { ok: false, error: zipFailure(error), code: error.code || 'ZIP_REJECTED' };
       }
     });
-    ipcMain.handle('settings:import-zip', async (_event, payload) => {
+    ipcMain.handle('settings:import-zip', async (event, payload) => {
       try {
-        const filePath = typeof payload === 'string' ? payload : payload?.filePath;
-        const pack = await importZipSelection(filePath, payload?.confirmSame === true);
+        assertSettingsSender(event);
+        const token = typeof payload === 'string' ? payload : payload?.token;
+        const pack = await importGrantedZip(token, payload?.confirmSame === true);
         return { ok: true, pack };
       } catch (error) {
         return { ok: false, code: error.code || 'ZIP_REJECTED', error: zipFailure(error) };
@@ -1338,7 +1397,7 @@ else {
     ipcMain.on('pet:import-skin', () => { chooseSkinImage(); });
     ipcMain.on('pet:import-skin-pack', () => { chooseSkinPack(); });
     ipcMain.on('pet:delete-skin-pack', (_event, id) => { deleteImportedPack(id); });
-    ipcMain.on('pet:edit-dialogues', () => { chooseDialogueEditor(); });
+    ipcMain.on('pet:edit-dialogues', () => { openSettingsPanel('dialogue'); });
     ipcMain.on('pet:export-preferences', () => { exportPreferences(); });
     ipcMain.on('pet:import-preferences', () => { importPreferences(); });
     ipcMain.on('pet:set-experience', (_event, key, value) => setExperience(key, value));
@@ -1376,10 +1435,9 @@ else {
       }, 250);
     });
     win.on('blur', cancelDrag);
-    screen.on('display-metrics-changed', () => onScreenTopology('metrics'));
-    screen.on('display-removed', () => onScreenTopology('removed'));
-    screen.on('display-added', () => onScreenTopology('added'));
-    ensureTray();
+    screen.on('display-metrics-changed', (_event, _display, changedMetrics) => scheduleScreenEvent('metrics', changedMetrics));
+    screen.on('display-removed', () => scheduleScreenEvent('removed'));
+    screen.on('display-added', () => scheduleScreenEvent('added'));
     await loadRenderer();
     writeIdleBudgetSnapshot('startup');
     if (smokeTest) {

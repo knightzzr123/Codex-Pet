@@ -54,7 +54,9 @@ test('currentArea 仍调用 screenToDipRect(null, scopeRect)，不改成窗口',
   assert.equal(args[1], rect);
   const main = fs.readFileSync(path.join(__dirname, '..', 'src', 'main.cjs'), 'utf8');
   assert.match(main, /screen\.screenToDipRect\(null, scope\.rect\)/);
-  assert.match(main, /onScreenTopology\('removed'\)/);
-  assert.match(main, /onScreenTopology\('metrics'\)/);
+  assert.match(main, /scheduleScreenEvent\('removed'\)/);
+  assert.match(main, /scheduleScreenEvent\('metrics'/);
+  assert.match(main, /getDisplayNearest/);
   assert.match(main, /relocateToVisibleDisplay/);
+  assert.match(main, /SCREEN_EVENT_DELAY_MS/);
 });

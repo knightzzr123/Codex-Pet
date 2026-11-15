@@ -130,9 +130,9 @@ test('HTML 有六个分类、读屏名称、拖拽区和导入前预览', () => 
   assert.match(css, /forced-colors: active/);
   assert.match(css, /border: 4px solid CanvasText/);
   const main = fs.readFileSync(path.join(root, 'src', 'main.cjs'), 'utf8');
-  assert.match(main, /new Tray/);
-  assert.match(main, /tray\.on\('click', openSettingsPanel\)/);
+  assert.doesNotMatch(main, /new Tray/);
   assert.match(main, /click: openSettingsPanel/);
+  assert.match(main, /before-input-event/);
   assert.match(source, /settingsReturnFocus/);
   assert.match(source, /settings-close'\)\?\.focus/);
   assert.match(source, /event\.key !== 'Tab'/);

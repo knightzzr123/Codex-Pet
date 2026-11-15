@@ -1,5 +1,6 @@
 // Minimal ZIP reader for skin packs. Stored and deflate only, no new dependencies.
-// Counts bytes actually inflated and never trusts the sizes declared in the headers.
+// Reads the central directory from the tail (at most 64KB + 22 bytes) and does
+// not trust local-header sizes. Output bytes are counted while inflating.
 const fs = require('node:fs');
 const zlib = require('node:zlib');
 const path = require('node:path');
@@ -9,15 +10,19 @@ const ZIP_LIMITS = Object.freeze({
   maxEntryBytes: 20 * 1024 * 1024,
   maxTotalBytes: 200 * 1024 * 1024,
   maxRatio: 100,
-  // A pack cannot be useful once the archive itself exceeds the unpacked budget.
-  maxArchiveBytes: 200 * 1024 * 1024 + 1024 * 1024
+  // The archive is buffered in the main process, so the cap is tighter than the
+  // 220MB ceiling in the spec. Anything larger is rejected before it is read.
+  maxArchiveBytes: 100 * 1024 * 1024
 });
 
+const RESERVED_NAME = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
+const ALLOWED_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'json']);
+
 class ZipError extends Error {
-  constructor(message) {
+  constructor(message, code = 'ZIP_REJECTED') {
     super(message);
     this.name = 'ZipError';
-    this.code = 'ZIP_REJECTED';
+    this.code = code;
   }
 }
 
@@ -31,7 +36,7 @@ function findEocd(buffer) {
   for (let offset = buffer.length - 22; offset >= min; offset -= 1) {
     if (buffer.readUInt32LE(offset) === signature) return offset;
   }
-  throw new ZipError('这不是有效的 ZIP 文件。');
+  throw new ZipError('这不是有效的 ZIP 文件。', 'ZIP_FORMAT');
 }
 
 function assertNoZip64Extra(extra) {
@@ -39,81 +44,124 @@ function assertNoZip64Extra(extra) {
   while (offset + 4 <= extra.length) {
     const id = extra.readUInt16LE(offset);
     const size = extra.readUInt16LE(offset + 2);
-    if (id === 1) throw new ZipError('不支持 ZIP64 压缩包。');
-    if (size < 0 || offset + 4 + size > extra.length) return;
+    if (id === 1) throw new ZipError('不支持 ZIP64 压缩包。', 'ZIP64');
+    if (offset + 4 + size > extra.length) return;
     offset += 4 + size;
   }
 }
 
+function unicodePathName(extra, nameBytes) {
+  let offset = 0;
+  while (offset + 4 <= extra.length) {
+    const id = extra.readUInt16LE(offset);
+    const size = extra.readUInt16LE(offset + 2);
+    if (offset + 4 + size > extra.length) return null;
+    if (id === 0x7075 && size >= 5) {
+      const body = extra.subarray(offset + 4, offset + 4 + size);
+      const crc = body.readUInt32LE(1);
+      if ((zlib.crc32(nameBytes) >>> 0) === crc) {
+        try { return new TextDecoder('utf-8', { fatal: true }).decode(body.subarray(5)); }
+        catch { throw new ZipError('无法识别压缩包内的文件名编码。', 'ZIP_NAME_ENCODING'); }
+      }
+    }
+    offset += 4 + size;
+  }
+  return null;
+}
+
 function assertNotZip64(buffer, eocd) {
+  const disk = buffer.readUInt16LE(eocd + 4);
+  const cdDisk = buffer.readUInt16LE(eocd + 6);
   const entries = buffer.readUInt16LE(eocd + 10);
   const cdSize = buffer.readUInt32LE(eocd + 12);
   const cdOffset = buffer.readUInt32LE(eocd + 16);
-  if (entries === 0xffff || cdSize === 0xffffffff || cdOffset === 0xffffffff) {
-    throw new ZipError('不支持 ZIP64 压缩包。');
+  if (entries === 0xffff || cdSize === 0xffffffff || cdOffset === 0xffffffff || disk === 0xffff || cdDisk === 0xffff) {
+    throw new ZipError('不支持 ZIP64 压缩包。', 'ZIP64');
   }
+  if (disk !== 0 || cdDisk !== 0) throw new ZipError('不支持分卷压缩包。', 'ZIP_SPLIT');
   if (eocd >= 20 && buffer.readUInt32LE(eocd - 20) === 0x07064b50) {
-    throw new ZipError('不支持 ZIP64 压缩包。');
+    throw new ZipError('不支持 ZIP64 压缩包。', 'ZIP64');
+  }
+  if (cdOffset > buffer.length || cdSize > buffer.length - cdOffset) {
+    throw new ZipError('压缩包目录损坏。', 'ZIP_FORMAT');
   }
   return { entries, cdSize, cdOffset };
 }
 
 function decodeEntryName(bytes, flags) {
-  if (!bytes.length) throw new ZipError('压缩包条目名称为空。');
+  if (!bytes.length) throw new ZipError('压缩包条目名称为空。', 'ZIP_NAME_ENCODING');
   if (flags & 0x800) {
     try { return new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
-    catch { throw new ZipError('无法识别压缩包内的文件名编码（已标记为 UTF-8，但内容无效）。'); }
+    catch { throw new ZipError('无法识别压缩包内的文件名编码（已标记为 UTF-8，但内容无效）。', 'ZIP_NAME_ENCODING'); }
   }
-  const printableAscii = [...bytes].every(byte => byte === 0x09 || (byte >= 0x20 && byte < 0x7f));
-  if (printableAscii) return Buffer.from(bytes).toString('utf8');
-  try {
-    const utf8 = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-    if (Buffer.from(utf8, 'utf8').equals(Buffer.from(bytes))) return utf8;
-  } catch { /* not UTF-8; try the Windows Chinese code page below */ }
+  if ([...bytes].every(byte => byte <= 0x7f)) return Buffer.from(bytes).toString('utf8');
   try { return new TextDecoder('gbk', { fatal: true }).decode(bytes); }
-  catch { throw new ZipError('无法识别压缩包内的文件名编码。请使用 UTF-8 或简体中文（CP936）重新压缩，不能导入乱码文件名。'); }
+  catch { throw new ZipError('无法识别压缩包内的文件名编码。请使用 UTF-8 或简体中文（CP936）重新压缩，不能导入乱码文件名。', 'ZIP_NAME_ENCODING'); }
 }
 
 function safeEntryName(name) {
-  if (typeof name !== 'string' || !name.trim() || name.includes('\u0000')) {
-    throw new ZipError('压缩包包含无效条目名称。');
+  const { safeRelativePath } = require('./skin-packs.cjs');
+  if (typeof name !== 'string' || name.includes('\u0000')) {
+    throw new ZipError('压缩包包含无效条目名称。', 'ZIP_PATH');
   }
-  const normalized = name.replace(/\\/g, '/');
-  if (normalized.startsWith('/') || normalized.startsWith('//')) throw new ZipError('压缩包包含绝对路径，已拒绝。');
-  if (/^[a-zA-Z]:/.test(normalized) || normalized.includes(':')) throw new ZipError('压缩包包含盘符或绝对路径，已拒绝。');
-  const parts = [];
-  for (const part of normalized.split('/')) {
-    if (part === '..') throw new ZipError('压缩包包含越界路径，已拒绝。');
-    if (!part || part === '.') continue;
-    parts.push(part);
+  if (name.includes(':')) throw new ZipError('压缩包包含盘符或绝对路径，已拒绝。', 'ZIP_PATH');
+  const slashed = name.replace(/\\/g, '/');
+  if (slashed.startsWith('/')) throw new ZipError('压缩包包含绝对路径，已拒绝。', 'ZIP_PATH');
+  const directory = slashed.endsWith('/');
+  const trimmed = directory ? slashed.slice(0, -1) : slashed;
+  let normalized;
+  try { normalized = safeRelativePath(trimmed, '压缩包条目'); }
+  catch (error) {
+    const message = String(error.message || '');
+    if (message.includes('空') || message.includes('跳出') || trimmed.includes('//') || trimmed.includes('/./') || trimmed.includes('..')) {
+      throw new ZipError('压缩包包含越界路径，已拒绝。', 'ZIP_PATH');
+    }
+    throw new ZipError(message || '压缩包包含无效条目名称。', 'ZIP_PATH');
   }
-  if (!parts.length) throw new ZipError('压缩包包含无效条目名称。');
-  const directory = normalized.endsWith('/');
-  return { name: parts.join('/') + (directory ? '/' : ''), parts, directory };
+  const parts = normalized.split('/');
+  for (const part of parts) {
+    if (part.endsWith('.') || part.endsWith(' ') || part.endsWith('\t')) {
+      throw new ZipError('压缩包条目名称不能以点或空格结尾。', 'ZIP_RESERVED_NAME');
+    }
+    if (RESERVED_NAME.test(part)) throw new ZipError(`压缩包包含 Windows 保留名“${part}”，已拒绝。`, 'ZIP_RESERVED_NAME');
+  }
+  return { name: normalized + (directory ? '/' : ''), parts, directory };
 }
 
-function isSymlink(versionMadeBy, externalAttributes) {
-  const mode = externalAttributes >>> 16;
-  return (mode & 0o170000) === 0o120000;
+function isSymlink(externalAttributes) {
+  return ((externalAttributes >>> 16) & 0o170000) === 0o120000;
 }
 
-function isDirectoryEntry(versionMadeBy, externalAttributes, directoryName) {
+function isDirectoryEntry(externalAttributes, directoryName) {
   if (directoryName) return true;
-  const mode = externalAttributes >>> 16;
-  return (mode & 0o170000) === 0o040000;
+  return ((externalAttributes >>> 16) & 0o170000) === 0o040000;
+}
+
+function isIgnoredEntry(entry) {
+  const base = entry.parts[entry.parts.length - 1];
+  return entry.parts[0] === '__MACOSX' || base === '.DS_Store' || base === 'Thumbs.db';
+}
+
+function assertAllowedExtension(safe) {
+  if (safe.directory) return;
+  const base = safe.parts[safe.parts.length - 1];
+  const dot = base.lastIndexOf('.');
+  const ext = dot > 0 ? base.slice(dot + 1).toLowerCase() : '';
+  if (!ALLOWED_EXT.has(ext)) {
+    throw new ZipError('压缩包内有不受支持的文件类型。皮肤包只能包含 manifest.json 与 PNG、JPG、GIF、WebP 或 BMP 图片。', 'ZIP_EXTENSION');
+  }
 }
 
 function parseCentralDirectory(buffer, limits) {
   const eocd = findEocd(buffer);
   const { entries, cdSize, cdOffset } = assertNotZip64(buffer, eocd);
-  if (entries > limits.maxEntries) throw new ZipError(`压缩包条目超过 ${limits.maxEntries} 个，已拒绝。`);
-  if (cdOffset + cdSize > buffer.length) throw new ZipError('压缩包目录损坏。');
+  if (entries > limits.maxEntries) throw new ZipError(`压缩包条目超过 ${limits.maxEntries} 个，已拒绝。`, 'ZIP_LIMIT');
   const parsed = [];
+  const folded = new Set();
   let cursor = cdOffset;
   const end = cdOffset + cdSize;
   while (cursor + 46 <= end) {
-    if (buffer.readUInt32LE(cursor) !== 0x02014b50) throw new ZipError('压缩包目录损坏。');
-    const versionMadeBy = buffer.readUInt16LE(cursor + 4);
+    if (buffer.readUInt32LE(cursor) !== 0x02014b50) throw new ZipError('压缩包目录损坏。', 'ZIP_FORMAT');
     const flags = buffer.readUInt16LE(cursor + 8);
     const method = buffer.readUInt16LE(cursor + 10);
     const crc = buffer.readUInt32LE(cursor + 16);
@@ -125,30 +173,50 @@ function parseCentralDirectory(buffer, limits) {
     const externalAttributes = buffer.readUInt32LE(cursor + 38);
     const localOffset = buffer.readUInt32LE(cursor + 42);
     const nameStart = cursor + 46;
+    if (nameStart + nameLength + extraLength + commentLength > end) throw new ZipError('压缩包目录损坏。', 'ZIP_FORMAT');
     const nameBytes = buffer.subarray(nameStart, nameStart + nameLength);
-    if (nameStart + nameLength + extraLength + commentLength > end) throw new ZipError('压缩包目录损坏。');
     const extra = buffer.subarray(nameStart + nameLength, nameStart + nameLength + extraLength);
     assertNoZip64Extra(extra);
-    if (flags & 0x1) throw new ZipError('不支持加密的压缩包条目。');
-    if (method !== 0 && method !== 8) throw new ZipError('只支持存储（stored）和 deflate 压缩，其他压缩方法已拒绝。');
-    if (isSymlink(versionMadeBy, externalAttributes)) throw new ZipError('压缩包包含符号链接，已拒绝。');
+    if (flags & 0x1) throw new ZipError('不支持加密的压缩包条目。', 'ZIP_ENCRYPTED');
+    if (method !== 0 && method !== 8) throw new ZipError('只支持存储（stored）和 deflate 压缩，其他压缩方法已拒绝。', 'ZIP_METHOD');
+    if (isSymlink(externalAttributes)) throw new ZipError('压缩包包含符号链接，已拒绝。', 'ZIP_SYMLINK');
     if (localOffset === 0xffffffff || compressedSize === 0xffffffff || uncompressedSize === 0xffffffff) {
-      throw new ZipError('不支持 ZIP64 压缩包。');
+      throw new ZipError('不支持 ZIP64 压缩包。', 'ZIP64');
     }
-    const decoded = decodeEntryName(nameBytes, flags);
+    const decoded = unicodePathName(extra, nameBytes) || decodeEntryName(nameBytes, flags);
     const safe = safeEntryName(decoded);
+    if (isIgnoredEntry({ parts: safe.parts })) {
+      cursor = nameStart + nameLength + extraLength + commentLength;
+      continue;
+    }
+    if (safe.parts.length > 2) {
+      throw new ZipError('manifest.json 只能位于压缩包根目录或唯一一层顶层目录。', 'ZIP_MANIFEST_LOCATION');
+    }
+    assertAllowedExtension(safe);
+    const fold = safe.name.toLowerCase();
+    if (folded.has(fold)) throw new ZipError('压缩包内存在大小写重名的条目。', 'ZIP_DUPLICATE_NAME');
+    folded.add(fold);
     parsed.push({
-      name: safe.name, parts: safe.parts, directory: isDirectoryEntry(versionMadeBy, externalAttributes, safe.directory),
-      flags, method, crc, compressedSize, uncompressedSize, localOffset
+      name: safe.name, parts: safe.parts, directory: isDirectoryEntry(externalAttributes, safe.directory),
+      flags, method, crc, compressedSize, uncompressedSize, localOffset, nameBytes
     });
-    if (parsed.length > limits.maxEntries) throw new ZipError(`压缩包条目超过 ${limits.maxEntries} 个，已拒绝。`);
+    if (parsed.length > limits.maxEntries) throw new ZipError(`压缩包条目超过 ${limits.maxEntries} 个，已拒绝。`, 'ZIP_LIMIT');
     cursor = nameStart + nameLength + extraLength + commentLength;
   }
-  if (parsed.length !== entries && entries !== 0) {
-    // Trust the records we could parse, but a short directory is corrupt.
-    if (parsed.length < entries) throw new ZipError('压缩包目录损坏。');
-  }
+  if (entries !== 0 && parsed.length < entries) throw new ZipError('压缩包目录损坏。', 'ZIP_FORMAT');
   return parsed;
+}
+
+function locatePackManifest(entries) {
+  const manifests = entries.filter(entry => !entry.directory && !isIgnoredEntry(entry) && entry.parts.at(-1) === 'manifest.json');
+  if (manifests.length !== 1) {
+    throw new ZipError(manifests.length ? '压缩包里有多份 manifest.json。' : '皮肤包缺少 manifest.json。', 'ZIP_MANIFEST_LOCATION');
+  }
+  const prefix = manifests[0].parts.slice(0, -1);
+  if (prefix.length > 1) {
+    throw new ZipError('manifest.json 只能位于压缩包根目录或唯一一层顶层目录。', 'ZIP_MANIFEST_LOCATION');
+  }
+  return { entry: manifests[0], prefix };
 }
 
 function inflateRawLimited(input, maxBytes) {
@@ -161,18 +229,18 @@ function inflateRawLimited(input, maxBytes) {
       if (settled) return;
       settled = true;
       inflate.destroy();
-      reject(error);
+      reject(error instanceof ZipError ? error : new ZipError('压缩数据无法解压，已拒绝。', 'ZIP_LIMIT'));
     };
     inflate.on('data', chunk => {
       if (settled) return;
       if (total + chunk.length > maxBytes) {
-        fail(new ZipError('解压后的条目超过大小或压缩比上限，已拒绝。'));
+        fail(new ZipError('解压后的条目超过大小或压缩比上限，已拒绝。', 'ZIP_LIMIT'));
         return;
       }
       total += chunk.length;
       chunks.push(chunk);
     });
-    inflate.on('error', () => fail(new ZipError('压缩数据无法解压，已拒绝。')));
+    inflate.on('error', () => fail(new ZipError('压缩数据无法解压，已拒绝。', 'ZIP_FORMAT')));
     inflate.on('end', () => {
       if (settled) return;
       settled = true;
@@ -183,84 +251,178 @@ function inflateRawLimited(input, maxBytes) {
 }
 
 async function readEntryPayload(buffer, entry, limits) {
-  if (entry.localOffset + 30 > buffer.length) throw new ZipError('压缩包本地文件头损坏。');
-  if (buffer.readUInt32LE(entry.localOffset) !== 0x04034b50) throw new ZipError('压缩包本地文件头损坏。');
+  if (entry.localOffset + 30 > buffer.length || buffer.readUInt32LE(entry.localOffset) !== 0x04034b50) {
+    throw new ZipError('压缩包本地文件头损坏。', 'ZIP_FORMAT');
+  }
+  const flags = buffer.readUInt16LE(entry.localOffset + 6);
+  const localMethod = buffer.readUInt16LE(entry.localOffset + 8);
+  const localCompressed = buffer.readUInt32LE(entry.localOffset + 18);
+  const localUncompressed = buffer.readUInt32LE(entry.localOffset + 22);
   const nameLength = buffer.readUInt16LE(entry.localOffset + 26);
   const extraLength = buffer.readUInt16LE(entry.localOffset + 28);
+  const localName = buffer.subarray(entry.localOffset + 30, entry.localOffset + 30 + nameLength);
+  if (localName.length !== entry.nameBytes.length || !localName.equals(entry.nameBytes)) {
+    throw new ZipError('本地文件头与中央目录的文件名不一致。', 'ZIP_PATH');
+  }
+  if (flags !== entry.flags || localMethod !== entry.method
+    || localCompressed !== entry.compressedSize || localUncompressed !== entry.uncompressedSize) {
+    throw new ZipError('本地文件头与中央目录不一致。', 'ZIP_PATH');
+  }
+  if (flags & 0x1) throw new ZipError('不支持加密的压缩包条目。', 'ZIP_ENCRYPTED');
   const dataStart = entry.localOffset + 30 + nameLength + extraLength;
   const dataEnd = dataStart + entry.compressedSize;
-  if (dataEnd > buffer.length) throw new ZipError('压缩包条目数据不完整。');
-  const compressed = buffer.subarray(dataStart, dataEnd);
+  if (dataEnd > buffer.length) throw new ZipError('压缩包条目数据不完整。', 'ZIP_FORMAT');
   if (entry.directory) return Buffer.alloc(0);
-  const ratioCap = Math.min(limits.maxEntryBytes, Math.max(1, compressed.length) * limits.maxRatio);
+  const compressed = buffer.subarray(dataStart, dataEnd);
+  const maxOutput = Math.min(entry.uncompressedSize, limits.maxEntryBytes);
   if (entry.method === 0) {
-    if (compressed.length > limits.maxEntryBytes || compressed.length > ratioCap) {
-      throw new ZipError('解压后的条目超过大小或压缩比上限，已拒绝。');
+    if (compressed.length === 0 && entry.uncompressedSize > 0) {
+      throw new ZipError('压缩后大小为 0 但条目不是空文件，已拒绝。', 'ZIP_LIMIT');
     }
-    return Buffer.from(compressed);
+    if (compressed.length !== entry.uncompressedSize) {
+      throw new ZipError('存储条目的长度与中央目录不一致。', 'ZIP_CRC');
+    }
+    if (compressed.length > maxOutput || compressed.length > limits.maxEntryBytes) {
+      throw new ZipError('解压后的条目超过大小或压缩比上限，已拒绝。', 'ZIP_LIMIT');
+    }
+    const output = Buffer.from(compressed);
+    if ((zlib.crc32(output) >>> 0) !== entry.crc) throw new ZipError('压缩包条目 CRC 校验失败。', 'ZIP_CRC');
+    return output;
   }
-  if (!compressed.length) throw new ZipError('压缩数据为空，已拒绝。');
-  const output = await inflateRawLimited(compressed, ratioCap + 1);
-  if (output.length > limits.maxEntryBytes) throw new ZipError('单个文件解压后超过 20 MB，已拒绝。');
-  if (compressed.length > 0 && output.length / compressed.length > limits.maxRatio) {
-    throw new ZipError('单个条目压缩比超过 100:1，已拒绝。');
+  if (!compressed.length) throw new ZipError('压缩后大小为 0 但条目不是空文件，已拒绝。', 'ZIP_LIMIT');
+  const output = await inflateRawLimited(compressed, maxOutput);
+  if (output.length > maxOutput) throw new ZipError('解压后的条目超过大小或压缩比上限，已拒绝。', 'ZIP_LIMIT');
+  if (output.length / compressed.length > limits.maxRatio) {
+    throw new ZipError('单个条目压缩比超过 100:1，已拒绝。', 'ZIP_LIMIT');
   }
+  if ((zlib.crc32(output) >>> 0) !== entry.crc) throw new ZipError('压缩包条目 CRC 校验失败。', 'ZIP_CRC');
   return output;
 }
 
-async function readZipBuffer(buffer, options = {}) {
-  if (!Buffer.isBuffer(buffer) || buffer.length < 22) throw new ZipError('这不是有效的 ZIP 文件。');
+function assertNoOverlap(buffer, entries) {
+  const eocd = findEocd(buffer);
+  const cdOffset = buffer.readUInt32LE(eocd + 16);
+  const ranges = [];
+  for (const entry of entries) {
+    if (entry.directory) continue;
+    if (entry.localOffset + 30 > buffer.length) throw new ZipError('压缩包本地文件头损坏。', 'ZIP_FORMAT');
+    const nameLength = buffer.readUInt16LE(entry.localOffset + 26);
+    const extraLength = buffer.readUInt16LE(entry.localOffset + 28);
+    const dataStart = entry.localOffset + 30 + nameLength + extraLength;
+    const dataEnd = dataStart + entry.compressedSize;
+    if (dataEnd > cdOffset) throw new ZipError('压缩包条目数据与中央目录重叠，已拒绝。', 'ZIP_FORMAT');
+    for (const range of ranges) {
+      if (dataStart < range.end && range.start < dataEnd) {
+        throw new ZipError('压缩包条目数据区重叠，已拒绝。', 'ZIP_FORMAT');
+      }
+    }
+    ranges.push({ start: dataStart, end: dataEnd });
+  }
+}
+
+function openZip(buffer, options = {}) {
+  if (!Buffer.isBuffer(buffer) || buffer.length < 22 || buffer[0] !== 0x50 || buffer[1] !== 0x4b) {
+    throw new ZipError('这不是有效的 ZIP 文件。', 'ZIP_FORMAT');
+  }
   const limits = limitsFrom(options);
-  if (buffer.length > limits.maxArchiveBytes) throw new ZipError('压缩包超过大小上限。');
+  if (buffer.length > limits.maxArchiveBytes) throw new ZipError('压缩包超过大小上限。', 'ZIP_LIMIT');
   const entries = parseCentralDirectory(buffer, limits);
+  assertNoOverlap(buffer, entries);
+  return {
+    entries,
+    limits,
+    read: entry => readEntryPayload(buffer, entry, limits)
+  };
+}
+
+async function readZipBuffer(buffer, options = {}) {
+  const zip = openZip(buffer, options);
   const files = [];
   let total = 0;
-  for (const entry of entries) {
-    const bytes = await readEntryPayload(buffer, entry, limits);
+  for (const entry of zip.entries) {
+    const bytes = await zip.read(entry);
     total += bytes.length;
-    if (total > limits.maxTotalBytes) throw new ZipError('解压后总量超过 200 MB，已拒绝。');
-    files.push({ name: entry.directory ? entry.name : entry.name.replace(/\/$/, ''), bytes, directory: entry.directory });
+    if (total > zip.limits.maxTotalBytes) throw new ZipError('解压后总量超过 200 MB，已拒绝。', 'ZIP_LIMIT');
+    if (!entry.directory) files.push({ name: entry.name, bytes, directory: false });
   }
   return files;
 }
 
-async function readZipFile(filePath, options = {}) {
-  const limits = limitsFrom(options);
+function readZipBufferSyncSize(filePath, limits) {
   const stat = fs.lstatSync(filePath);
-  if (stat.isSymbolicLink() || !stat.isFile()) throw new ZipError('只能导入普通 ZIP 文件。');
-  if (stat.size > limits.maxArchiveBytes) throw new ZipError('压缩包超过大小上限。');
-  return readZipBuffer(fs.readFileSync(filePath), options);
+  if (stat.isSymbolicLink() || !stat.isFile()) throw new ZipError('只能导入普通 ZIP 文件。', 'ZIP_FORMAT');
+  if (stat.size > limits.maxArchiveBytes) throw new ZipError('压缩包超过大小上限。', 'ZIP_LIMIT');
+  return fs.readFileSync(filePath);
+}
+
+async function readZipFile(filePath, options = {}) {
+  return readZipBuffer(readZipBufferSyncSize(filePath, limitsFrom(options)), options);
+}
+
+function relativeToManifest(entry, prefix) {
+  if (prefix.length && (entry.parts.length <= prefix.length || prefix.some((part, index) => entry.parts[index] !== part))) return null;
+  return entry.parts.slice(prefix.length).join('/');
+}
+
+async function inspectZipBuffer(buffer, options = {}) {
+  const zip = openZip(buffer, options);
+  const located = locatePackManifest(zip.entries);
+  let total = 0;
+  const manifestBytes = await zip.read(located.entry);
+  total += manifestBytes.length;
+  const files = [{ name: 'manifest.json', bytes: manifestBytes }];
+  const referenced = options.referencedNames instanceof Set ? options.referencedNames : null;
+  for (const entry of zip.entries) {
+    if (entry === located.entry || entry.directory) continue;
+    const bytes = await zip.read(entry);
+    total += bytes.length;
+    if (total > zip.limits.maxTotalBytes) throw new ZipError('解压后总量超过 200 MB，已拒绝。', 'ZIP_LIMIT');
+    if (isIgnoredEntry(entry)) continue;
+    const relative = relativeToManifest(entry, located.prefix);
+    if (!relative || (referenced && !referenced.has(relative))) continue;
+    files.push({ name: relative, bytes });
+  }
+  return { files, prefix: located.prefix };
+}
+
+async function inspectZipFile(filePath, options = {}) {
+  const limits = limitsFrom(options);
+  return inspectZipBuffer(readZipBufferSyncSize(filePath, limits), options);
 }
 
 function destinationFor(root, parts) {
   const resolvedRoot = path.resolve(root);
   let current = resolvedRoot;
   for (const part of parts) {
-    if (!part || part === '.' || part === '..' || part.includes('\u0000') || part.includes('/') || part.includes('\\')) {
-      throw new ZipError('压缩包包含越界路径，已拒绝。');
+    if (!part || part === '.' || part === '..' || part.includes('\u0000') || part.includes('/') || part.includes('\\') || part.includes(':')) {
+      throw new ZipError('压缩包包含越界路径，已拒绝。', 'ZIP_PATH');
     }
-    current = path.join(current, part);
+    current = path.resolve(resolvedRoot, ...parts.slice(0, parts.indexOf(part) + 1));
     if (fs.existsSync(current) && fs.lstatSync(current).isSymbolicLink()) {
-      throw new ZipError('压缩包包含符号链接，已拒绝。');
+      throw new ZipError('压缩包包含符号链接，已拒绝。', 'ZIP_SYMLINK');
     }
   }
-  const relative = path.relative(resolvedRoot, current);
-  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) throw new ZipError('压缩包包含越界路径，已拒绝。');
-  return current;
+  const resolved = path.resolve(resolvedRoot, ...parts);
+  const relative = path.relative(resolvedRoot, resolved);
+  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) {
+    throw new ZipError('压缩包包含越界路径，已拒绝。', 'ZIP_PATH');
+  }
+  return resolved;
 }
 
 function writeEntries(root, entries) {
-  fs.mkdirSync(root, { recursive: true });
+  const resolvedRoot = path.resolve(root);
+  fs.mkdirSync(resolvedRoot, { recursive: true });
+  const seen = new Set();
   for (const entry of entries) {
-    const rawParts = String(entry.name || '').replace(/\\/g, '/').split('/').filter(part => part && part !== '.');
-    if (!rawParts.length || rawParts.some(part => part === '..')) throw new ZipError('压缩包包含越界路径，已拒绝。');
-    if (entry.directory || String(entry.name).endsWith('/')) {
-      fs.mkdirSync(destinationFor(root, rawParts), { recursive: true });
-      continue;
-    }
-    const target = destinationFor(root, rawParts);
+    if (entry.directory || String(entry.name || '').endsWith('/')) continue;
+    const safe = safeEntryName(String(entry.name || ''));
+    const fold = safe.name.toLowerCase();
+    if (seen.has(fold)) throw new ZipError('压缩包内存在大小写重名的条目。', 'ZIP_DUPLICATE_NAME');
+    seen.add(fold);
+    const target = destinationFor(resolvedRoot, safe.parts);
+    if (!target.startsWith(resolvedRoot + path.sep)) throw new ZipError('压缩包包含越界路径，已拒绝。', 'ZIP_PATH');
     fs.mkdirSync(path.dirname(target), { recursive: true });
-    if (fs.existsSync(target) && fs.lstatSync(target).isSymbolicLink()) throw new ZipError('压缩包包含符号链接，已拒绝。');
     const handle = fs.openSync(target, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL);
     try { fs.writeFileSync(handle, entry.bytes); }
     finally { fs.closeSync(handle); }
@@ -272,7 +434,12 @@ module.exports = {
   ZipError,
   readZipBuffer,
   readZipFile,
+  openZip,
+  inspectZipBuffer,
+  inspectZipFile,
+  locatePackManifest,
   writeEntries,
   decodeEntryName,
-  safeEntryName
+  safeEntryName,
+  isIgnoredEntry
 };

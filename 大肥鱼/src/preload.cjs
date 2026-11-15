@@ -34,9 +34,4 @@ contextBridge.exposeInMainWorld('petAPI', {
     ipcRenderer.on('pet:state', listener);
     return () => ipcRenderer.removeListener('pet:state', listener);
   },
-  onOpenSettings: callback => {
-    const listener = () => callback();
-    ipcRenderer.on('pet:open-settings', listener);
-    return () => ipcRenderer.removeListener('pet:open-settings', listener);
-  }
 });

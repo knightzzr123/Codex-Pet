@@ -21,6 +21,7 @@ function buildZip(entries) {
     const raw = entry.data ?? Buffer.alloc(0);
     const stored = method === 8 ? zlib.deflateRawSync(raw) : raw;
     const flags = entry.flags ?? (Buffer.isBuffer(entry.name) ? 0 : 0x800);
+    const crc = entry.crc ?? crc32(raw);
     const compressedSize = entry.compressedSize ?? stored.length;
     const uncompressedSize = entry.uncompressedSize ?? raw.length;
     const versionMadeBy = entry.versionMadeBy ?? 20;
@@ -30,7 +31,7 @@ function buildZip(entries) {
     local.writeUInt16LE(20, 4);
     local.writeUInt16LE(flags, 6);
     local.writeUInt16LE(method, 8);
-    local.writeUInt32LE(crc32(raw), 14);
+    local.writeUInt32LE(crc, 14);
     local.writeUInt32LE(compressedSize, 18);
     local.writeUInt32LE(uncompressedSize, 22);
     local.writeUInt16LE(name.length, 26);
@@ -44,7 +45,7 @@ function buildZip(entries) {
     central.writeUInt16LE(20, 6);
     central.writeUInt16LE(flags, 8);
     central.writeUInt16LE(method, 10);
-    central.writeUInt32LE(crc32(raw), 16);
+    central.writeUInt32LE(crc, 16);
     central.writeUInt32LE(compressedSize, 20);
     central.writeUInt32LE(uncompressedSize, 24);
     central.writeUInt16LE(name.length, 28);
@@ -76,6 +77,7 @@ test('默认上限与皮肤包清单一致：64 条、单文件 20 MB、总量 2
   assert.equal(ZIP_LIMITS.maxEntryBytes, 20 * 1024 * 1024);
   assert.equal(ZIP_LIMITS.maxTotalBytes, 200 * 1024 * 1024);
   assert.equal(ZIP_LIMITS.maxRatio, 100);
+  assert.equal(ZIP_LIMITS.maxArchiveBytes, 100 * 1024 * 1024);
 });
 
 test('合法 stored ZIP 保留 UTF-8 中文文件名', async () => {
@@ -128,24 +130,24 @@ test('拒绝加密条目和非 stored/deflate 压缩方法', async () => {
 
 test('按实际解压字节拒绝超过 100:1 的压缩炸弹，不信任头里声明的未压缩大小', async () => {
   await assert.rejects(() => readZipBuffer(buildZip([
-    { name: 'bomb.bin', method: 8, data: Buffer.alloc(200 * 1024, 0), uncompressedSize: 10 }
+    { name: 'bomb.png', method: 8, data: Buffer.alloc(200 * 1024, 0), uncompressedSize: 10 }
   ])), /压缩比|大小/);
 });
 
 test('条目数、单文件和解压总量上限可拒绝异常包', async () => {
-  const many = Array.from({ length: 65 }, (_value, index) => ({ name: `f${index}.txt`, data: Buffer.from('x') }));
+  const many = Array.from({ length: 65 }, (_value, index) => ({ name: `f${index}.png`, data: Buffer.from('x') }));
   await assert.rejects(() => readZipBuffer(buildZip(many)), /64/);
   await assert.rejects(() => readZipBuffer(buildZip([
-    { name: 'big.bin', data: Buffer.alloc(80, 1) }
+    { name: 'big.png', data: Buffer.alloc(80, 1) }
   ]), { limits: { maxEntryBytes: 32, maxTotalBytes: 200, maxEntries: 64, maxRatio: 100, maxArchiveBytes: 1000 } }), /大小|上限/);
   await assert.rejects(() => readZipBuffer(buildZip([
-    { name: 'a.bin', data: Buffer.alloc(40, 1) },
-    { name: 'b.bin', data: Buffer.alloc(40, 2) }
+    { name: 'a.png', data: Buffer.alloc(40, 1) },
+    { name: 'b.png', data: Buffer.alloc(40, 2) }
   ]), { limits: { maxEntryBytes: 100, maxTotalBytes: 50, maxEntries: 64, maxRatio: 100, maxArchiveBytes: 1000 } }), /总量/);
 });
 
 test('拒绝 ZIP64 定位头，普通文件内容里的字节不会被误判', async () => {
-  const zip = buildZip([{ name: 'ok.txt', data: Buffer.from([0x50, 0x4b, 0x06, 0x06, 0x01, 0x00]) }]);
+  const zip = buildZip([{ name: 'ok.json', data: Buffer.from([0x50, 0x4b, 0x06, 0x06, 0x01, 0x00]) }]);
   const entries = await readZipBuffer(zip);
   assert.equal(entries[0].bytes[0], 0x50);
   const eocd = zip.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
@@ -164,10 +166,20 @@ test('解压写入临时目录时再次挡住越界路径和符号链接', async
   assert.equal(fs.existsSync(path.join(root, 'evil.txt')), false);
 });
 
+test('PNG 条目 CRC 错误、本地头名称不一致都会拒绝', async () => {
+  await assert.rejects(() => readZipBuffer(buildZip([
+    { name: 'role.png', data: Buffer.from('png-bytes'), crc: 0xdeadbeef }
+  ])), error => error.code === 'ZIP_CRC');
+  const mismatched = buildZip([{ name: 'role.png', data: Buffer.from('x') }]);
+  mismatched[26] = 0;
+  mismatched[27] = 0;
+  await assert.rejects(() => readZipBuffer(mismatched), /不一致|损坏|文件名/);
+});
+
 test('从文件读取时拒绝符号链接和非 ZIP', async t => {
   const root = temporary(t);
   const file = path.join(root, 'pack.zip');
-  fs.writeFileSync(file, buildZip([{ name: 'a.txt', data: Buffer.from('hi') }]));
+  fs.writeFileSync(file, buildZip([{ name: 'a.json', data: Buffer.from('hi') }]));
   const read = await readZipFile(file);
   assert.equal(read[0].bytes.toString(), 'hi');
   const link = path.join(root, 'link.zip');
@@ -246,7 +258,7 @@ test('CP936 文件名的 ZIP 能导入，坏 ZIP 留下的解压目录会在下�
   const imported = await library.importZip(zip, async () => {});
   assert.equal(imported.name, '中文包');
   const stale = path.join(library.directory, `.staging-1-${'a'.repeat(8)}`);
-  const unzip = path.join(library.directory, `.unzip-1-${'b'.repeat(8)}`);
+  const unzip = path.join(library.directory, `.staging-zip-1-${'b'.repeat(8)}`);
   fs.mkdirSync(stale);
   fs.writeFileSync(path.join(stale, 'half.png'), 'partial');
   fs.mkdirSync(unzip);

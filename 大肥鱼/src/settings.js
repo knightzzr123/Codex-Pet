@@ -1,7 +1,7 @@
 const $ = id => document.getElementById(id);
 let state = {};
 let settingsReturnFocus = null;
-let pendingZip = '';
+let pendingToken = '';
 let currentPreview = null;
 
 function nodes(root, selector) {
@@ -163,7 +163,7 @@ function showPreview(preview) {
 }
 
 function clearPreview() {
-  pendingZip = '';
+  pendingToken = '';
   currentPreview = null;
   const box = $('settings-zip-preview');
   if (box) box.hidden = true;
@@ -174,12 +174,22 @@ function setStatus(message) {
   if (status) status.textContent = message || '';
 }
 
-async function previewZip(filePath) {
-  if (!filePath || !window.settingsAPI?.previewZip) return;
-  pendingZip = filePath;
+function isHiddenDeep(node) {
+  let current = node;
+  while (current) {
+    if (current.hidden) return true;
+    if (typeof current.closest === 'function' && current.closest('[hidden]')) return true;
+    current = current.parentElement || null;
+  }
+  return false;
+}
+
+async function previewToken(token) {
+  if (!token || !window.settingsAPI?.previewZip) return;
+  pendingToken = token;
   setStatus('正在读取皮肤包…');
   try {
-    const preview = await window.settingsAPI.previewZip(filePath);
+    const preview = await window.settingsAPI.previewZip(token);
     if (!preview || preview.error) {
       clearPreview();
       setStatus(preview?.error || '无法预览这个 ZIP。');
@@ -195,12 +205,12 @@ async function previewZip(filePath) {
 
 async function chooseZip() {
   const chosen = await window.settingsAPI?.chooseZip?.();
-  if (chosen?.filePath) await previewZip(chosen.filePath);
+  if (chosen?.token) await previewToken(chosen.token);
 }
 
 async function submitZip() {
-  if (!pendingZip || !window.settingsAPI?.importZip) return;
-  const result = await window.settingsAPI.importZip({ filePath: pendingZip, confirmSame: currentPreview?.needsConfirm === true });
+  if (!pendingToken || !window.settingsAPI?.importZip) return;
+  const result = await window.settingsAPI.importZip({ token: pendingToken, confirmSame: currentPreview?.needsConfirm === true });
   if (result?.code === 'PACK_CONFIRM') {
     showPreview({ ...(currentPreview || {}), needsConfirm: true, name: result.name || currentPreview?.name });
     return;
@@ -219,7 +229,7 @@ function bindStaticControls() {
     if (event.key !== 'Tab') return;
     const panel = $('settings-panel');
     const focusable = nodes(panel, 'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])')
-      .filter(node => !node.hidden);
+      .filter(node => !isHiddenDeep(node));
     if (!focusable.length) return;
     const first = focusable[0];
     const last = focusable.at(-1);
@@ -258,13 +268,28 @@ function bindStaticControls() {
   const drop = $('settings-zip-drop');
   drop?.addEventListener('dragover', event => { event.preventDefault(); drop.classList?.add('is-drag'); });
   drop?.addEventListener('dragleave', () => drop.classList?.remove('is-drag'));
-  drop?.addEventListener('drop', event => {
+  drop?.addEventListener('drop', async event => {
     event.preventDefault();
     drop.classList?.remove('is-drag');
     const file = event.dataTransfer?.files?.[0];
-    const filePath = file ? (window.settingsAPI?.pathForFile?.(file) || file.path || '') : '';
-    if (filePath) previewZip(filePath);
+    if (!file || !window.settingsAPI?.registerDrop) return;
+    const registered = await window.settingsAPI.registerDrop(file);
+    if (registered?.token) previewToken(registered.token);
+    else setStatus(registered?.error || '无法读取拖入的文件。');
   });
+  for (const groupId of ['settings-skins', 'settings-size', 'settings-bubble-seconds']) {
+    $(groupId)?.addEventListener('keydown', event => {
+      if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return;
+      const radios = nodes($(groupId), '[role="radio"]');
+      if (!radios.length) return;
+      event.preventDefault();
+      const index = Math.max(0, radios.indexOf(document.activeElement));
+      const delta = event.key === 'ArrowLeft' || event.key === 'ArrowUp' ? -1 : 1;
+      const next = radios[(index + delta + radios.length) % radios.length];
+      next.focus?.();
+      next.click?.();
+    });
+  }
   drop?.addEventListener('keydown', event => {
     if (event.key !== 'Enter' && event.key !== ' ') return;
     event.preventDefault();
@@ -333,7 +358,8 @@ function boot() {
     window.settingsAPI.onState(applyState);
     window.settingsAPI.getState?.().then(applyState).catch(() => {});
   } else if (search().get('preview') === '1') applyState(mockState());
-  focusClose();
+  $('tab-appearance')?.focus?.({ preventScroll: true }) || focusClose();
+  window.settingsAPI?.onShowGroup?.(selectCategory);
 }
 
 boot();

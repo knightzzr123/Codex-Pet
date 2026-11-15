@@ -20,8 +20,17 @@ contextBridge.exposeInMainWorld('settingsAPI', {
   resetGroup: groupId => ipcRenderer.send('pet:reset-group', groupId),
   resetAll: () => ipcRenderer.send('pet:reset-all'),
   chooseZip: () => ipcRenderer.invoke('settings:choose-zip'),
-  previewZip: filePath => ipcRenderer.invoke('settings:preview-zip', filePath),
+  registerDrop: file => {
+    let filePath = '';
+    try { filePath = webUtils.getPathForFile(file); } catch { filePath = ''; }
+    return ipcRenderer.invoke('settings:register-drop', filePath);
+  },
+  previewZip: token => ipcRenderer.invoke('settings:preview-zip', token),
   importZip: payload => ipcRenderer.invoke('settings:import-zip', payload),
-  pathForFile: file => { try { return webUtils.getPathForFile(file); } catch { return ''; } },
+  onShowGroup: callback => {
+    const listener = (_event, groupId) => callback(groupId);
+    ipcRenderer.on('settings:show-group', listener);
+    return () => ipcRenderer.removeListener('settings:show-group', listener);
+  },
   about: () => ipcRenderer.invoke('settings:about')
 });

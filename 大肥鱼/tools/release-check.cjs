@@ -188,6 +188,32 @@ function writeFixturePackage(root, version) {
   return root;
 }
 
+function verifySha256Sums(packageRoot) {
+  const errors = [];
+  const root = path.resolve(packageRoot);
+  const candidates = [path.join(path.dirname(root), 'SHA256SUMS'), path.join(root, 'SHA256SUMS')];
+  const sumsFile = candidates.find(file => fs.existsSync(file) && fs.statSync(file).isFile());
+  if (!sumsFile) return { checked: false, errors };
+  const text = fs.readFileSync(sumsFile, 'utf8');
+  if (text.includes('\r')) errors.push('SHA256SUMS 必须使用 LF 换行');
+  const dir = path.dirname(sumsFile);
+  let verified = 0;
+  for (const line of text.split('\n')) {
+    if (!line) continue;
+    const match = /^([0-9a-f]{64})  (.+)$/.exec(line);
+    if (!match) { errors.push('SHA256SUMS 行格式无效'); continue; }
+    const file = path.join(dir, match[2]);
+    if (!fs.existsSync(file) || !fs.statSync(file).isFile()) {
+      errors.push('SHA256SUMS 指向的产物不存在：' + match[2]);
+      continue;
+    }
+    verified += 1;
+    if (hashFile(file) !== match[1]) errors.push('SHA256SUMS 与产物不一致：' + match[2]);
+  }
+  if (!verified) errors.push('SHA256SUMS 没有可校验的产物');
+  return { checked: true, errors, verified };
+}
+
 function runSelfCheck({ packageRoot, oldPackageRoot, baseDir, keep = false, requireComplete = true } = {}) {
   const ownsTemp = !baseDir;
   const temp = baseDir ? path.resolve(baseDir) : fs.mkdtempSync(path.join(os.tmpdir(), 'dafeiyu-release-check-'));
@@ -201,6 +227,11 @@ function runSelfCheck({ packageRoot, oldPackageRoot, baseDir, keep = false, requ
   try {
     const inspected = inspectPackageTree(newRoot, { requireComplete });
     report.packageChecks = inspected;
+    if (packageRoot) {
+      const sums = verifySha256Sums(newRoot);
+      report.sha256sums = sums;
+      if (sums.checked) report.errors.push(...sums.errors);
+    }
     if (!inspected.ok) { report.errors.push(...inspected.errors); return report; }
 
     const install = simulateInstall({ packageRoot: newRoot, installDir, dataDir });

@@ -43,6 +43,22 @@ test('MCP clientInfo versions and package.py default match 3.4.0', () => {
   assert.equal(readJson('package.json').version, expected);
 });
 
+test('诊断夹具里的 3.3.2 是旧安装树样本，不是当前产品版本', () => {
+  // diagnose.test.cjs / diagnose-repair.test.cjs 写入的 3.3.2 用来模拟一份已经装好的目录，
+  // 不跟随本次升版。test_package_type.py 的 setUp 同样先放一份旧元数据，再由 package.py 改写成 3.4.0。
+  for (const relative of ['test/diagnose.test.cjs', 'test/diagnose-repair.test.cjs']) {
+    assert.match(fs.readFileSync(path.join(root, relative), 'utf8'), /3\.3\.2/);
+  }
+  assert.match(fs.readFileSync(path.join(root, 'test', 'test_package_type.py'), 'utf8'), /3\.4\.0/);
+  const parentReadme = path.resolve(root, '..', 'README.md');
+  if (fs.existsSync(parentReadme)) {
+    const text = fs.readFileSync(parentReadme, 'utf8');
+    assert.match(text, /3\.4\.0/);
+    assert.match(text, /Codex-Pet-V1\.4/);
+    assert.doesNotMatch(text, /Codex-Pet-V1\.3/);
+  }
+});
+
 test('版本规则写明展示版升次版本号、热修复升修订号', () => {
   const doc = fs.readFileSync(path.join(root, 'docs', 'VERSIONING.md'), 'utf8');
   assert.match(doc, /V1\.4` = `3\.4\.0/);

@@ -23,10 +23,12 @@ function centeredBounds(screen, anchorWindow) {
     ? screen.getDisplayMatching(anchorWindow.getBounds())
     : screen.getPrimaryDisplay();
   const area = display.workArea;
-  const width = Math.min(980, Math.max(720, area.width - 48));
-  const height = Math.min(720, Math.max(560, area.height - 48));
+  const width = Math.min(960, area.width);
+  const height = Math.min(680, area.height);
   return {
     width, height,
+    minWidth: Math.min(800, width),
+    minHeight: Math.min(560, height),
     x: Math.round(area.x + (area.width - width) / 2),
     y: Math.round(area.y + (area.height - height) / 2)
   };
@@ -37,13 +39,14 @@ function openSettingsWindow(options = {}) {
   const resolved = resolveSettingsWindow(getSettingsWindow(), () => {
     const bounds = centeredBounds(screen, options.anchor);
     const win = new BrowserWindow({
-      ...bounds,
-      minWidth: Math.min(680, bounds.width),
-      minHeight: Math.min(520, bounds.height),
+      width: bounds.width, height: bounds.height, x: bounds.x, y: bounds.y,
+      minWidth: bounds.minWidth, minHeight: bounds.minHeight,
       title: '设置 · 大肥鱼',
+      parent: options.anchor && options.anchor.isDestroyed?.() !== true ? options.anchor : undefined,
+      modal: false,
       show: false,
       autoHideMenuBar: true,
-      backgroundColor: '#f4f6fb',
+      backgroundColor: '#f5f7fc',
       webPreferences: {
         preload: path.join(__dirname, 'settings-preload.cjs'),
         contextIsolation: true,

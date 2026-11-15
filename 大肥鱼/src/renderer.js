@@ -513,6 +513,8 @@ function receiveState(next) {
   if (reducedMotion()) for (const animation of [petAnimation, bubbleFollowAnimation, reactionAnimation, speechAnimation, numberAnimation]) animation?.cancel();
   render();
 }
+window.addEventListener('dragover', event => event.preventDefault());
+window.addEventListener('drop', event => { event.preventDefault(); });
 window.petAPI.onState(receiveState);
 window.petAPI.getState().then(receiveState);
 

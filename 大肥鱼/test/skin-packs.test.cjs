@@ -190,7 +190,7 @@ test('主进程接入皮肤包导入、同窗口多角色切换与单实例锁',
   assert.match(main, /pet:import-skin-pack/);
   assert.match(main, /packCharacterId\(pack\.id, character\.id\)/);
   assert.match(main, /setSkin\(packCharacterId\(pack\.id, first\.id\)\)/);
-  assert.match(main, /importZipSelection/);
+  assert.match(main, /importGrantedZip|importPrepared/);
   assert.equal((main.match(/new BrowserWindow/g) || []).length, 1);
   assert.match(html, /id="settings-import-pack"/);
   assert.match(html, /id="settings-import-zip"/);

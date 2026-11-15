@@ -66,4 +66,9 @@ with zipfile.ZipFile(output) as archive:
     if json.loads(archive.read('大肥鱼/PACKAGE-TYPE.json'))['packageType'] != 'source':
         raise ValueError('Source ZIP package type marker is invalid.')
 print(f'source package: {len(files)} files, {sum(source.stat().st_size for _, source in files)} bytes before compression.')
+digest = hashlib.sha256(output.read_bytes()).hexdigest()
+sums_path = output.parent / 'SHA256SUMS'
+previous = sums_path.read_text(encoding='utf-8') if sums_path.exists() else ''
+kept = [row for row in previous.splitlines() if row.strip() and not row.endswith('  ' + output.name)]
+sums_path.write_text(''.join(f'{row}\n' for row in [*kept, f'{digest}  {output.name}']), encoding='utf-8', newline='\n')
 print(output)
