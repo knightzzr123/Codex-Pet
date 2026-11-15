@@ -25,6 +25,7 @@
   --text: var(--color-text);
   --muted: var(--color-text-secondary);
   --line: #d7e0f2;
+  --scrollbar-thumb: #c3cfe6;
   --accent: var(--color-accent);
   --accent-text: #fffefc;
   --chip: #e8eefc;
@@ -52,6 +53,7 @@
     --text: var(--color-text);
     --muted: var(--color-text-secondary);
     --line: #343c52;
+    --scrollbar-thumb: #5c6784;
     --accent: var(--color-accent);
     --accent-text: #17203a;
     --chip: #2a3348;
@@ -77,6 +79,7 @@
   --text: var(--color-text);
   --muted: var(--color-text-secondary);
   --line: #343c52;
+  --scrollbar-thumb: #5c6784;
   --accent: var(--color-accent);
   --accent-text: #17203a;
   --chip: #2a3348;
@@ -129,7 +132,21 @@ button { cursor: pointer; }
   border: 1px solid transparent; border-radius: var(--radius-sm); background: transparent; color: var(--text);
 }
 .settings-tab[aria-selected="true"] { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
-.settings-content { overflow: auto; padding: var(--space-4) var(--space-5) var(--space-6); }
+:root { scrollbar-color: var(--scrollbar-thumb) transparent; }
+.settings-content {
+  overflow: auto;
+  padding: var(--space-4) var(--space-5) var(--space-6);
+  /* Chromium honours the ::-webkit-scrollbar rules below only while the
+     standard property is `auto`; the inherited themed value would replace the
+     10px track with the platform default. */
+  scrollbar-color: auto;
+}
+.settings-content::-webkit-scrollbar { width: 10px; height: 10px; }
+.settings-content::-webkit-scrollbar-track { background: transparent; }
+.settings-content::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb); border-radius: 5px; border: 2px solid var(--bg);
+}
+.settings-content::-webkit-scrollbar-thumb:hover { background: var(--muted); }
 .settings-panel-page h2 { margin: 0; font-size: 18px; }
 .settings-section-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); margin-bottom: var(--space-3); }
 .settings-card, .settings-drop, .settings-preview {

@@ -73,3 +73,25 @@ test('深色主题的文字、链接、边框和状态底色达到对比度', ()
   assert.match(css, /data-state="illegal"\] \{ background: var\(--color-danger-bg\); border-color: var\(--color-danger\)/);
   assert.doesNotMatch(css, /data-state="illegal"\][^{]*\{[^}]*#fdeeee/);
 });
+
+test('V4 深色滚动条跟随主题：10px 轨道、thumb 对背景 ≥3:1', () => {
+  const css = fs.readFileSync(path.join(__dirname, '..', 'src', 'settings.css'), 'utf8');
+  for (const marker of [':root:not([data-theme="light"])', ':root[data-theme="dark"]']) {
+    const resolve = variables(blockAfter(css, marker));
+    const thumb = resolve('--scrollbar-thumb');
+    const background = resolve('--bg');
+    assert.equal(thumb, '#5c6784', `${marker} thumb`);
+    assert.ok(contrast(thumb, background) >= 3, `${marker} scrollbar ${contrast(thumb, background)}`);
+  }
+  const light = variables(blockAfter(css, ':root {'));
+  assert.equal(light('--scrollbar-thumb'), '#c3cfe6');
+  assert.match(css, /:root \{ scrollbar-color: var\(--scrollbar-thumb\) transparent; \}/);
+  assert.match(css, /\.settings-content::-webkit-scrollbar \{ width: 10px; height: 10px; \}/);
+  assert.match(css, /\.settings-content::-webkit-scrollbar-track \{ background: transparent; \}/);
+  assert.match(css, /\.settings-content::-webkit-scrollbar-thumb \{[^}]*background: var\(--scrollbar-thumb\)/);
+  assert.match(css, /\.settings-content::-webkit-scrollbar-thumb \{[^}]*border-radius: 5px; border: 2px solid var\(--bg\)/);
+  assert.match(css, /\.settings-content::-webkit-scrollbar-thumb:hover \{ background: var\(--muted\); \}/);
+  // The real scroll container is .settings-content; body/html do not scroll.
+  assert.doesNotMatch(css, /(^|\n)\s*(body|html)::-webkit-scrollbar/);
+  assert.match(blockAfter(css, '.settings-content {'), /overflow: auto/);
+});
