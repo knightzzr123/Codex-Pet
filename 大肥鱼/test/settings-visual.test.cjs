@@ -69,12 +69,13 @@ test('V1 外观页首屏紧凑：皮肤卡片、导入区、大小按钮与间�
   assert.match(sizeBox, /flex-wrap: wrap/);
   assert.match(sizeBox, /gap: 6px/);
 
-  assert.match(block(css, '.settings-content {'), /padding: var\(--space-5\) var\(--space-5\) var\(--space-6\)/);
+  assert.match(block(css, '.settings-content {'), /padding: var\(--space-4\) var\(--space-5\) var\(--space-6\)/);
   assert.match(block(css, '.settings-kicker-title'), /margin: var\(--space-4\) 0 var\(--space-2\)/);
 
   const reset = block(css, '.settings-reset[data-reset-key]');
   assert.match(reset, /width: 32px/);
   assert.match(reset, /height: 32px/);
+  assert.match(block(css, '.settings-reset-group'), /min-height: 32px/);
   assert.match(html, /data-reset-key="opacity" aria-label="重置透明度"/);
   assert.match(html, /data-reset-key="sizeLevel" aria-label="重置大小"/);
   assert.match(css, /button:focus-visible, input:focus-visible, \.settings-drop:focus-visible \{/);
@@ -197,6 +198,13 @@ test('V3 删除重复区块标题，控件行用 label/for 与 radiogroup 关联
   assert.match(field, /align-items: center/);
   assert.match(field, /gap: var\(--space-1\) var\(--space-2\)/);
   assert.match(block(css, '.settings-field .settings-value'), /justify-self: end/);
+  // Every cell is pinned to the first row so the range starts on row two; an
+  // auto-placed reset would otherwise push the slider into a third row.
+  assert.match(block(css, '.settings-field .settings-label'), /grid-row: 1/);
+  assert.match(block(css, '.settings-field .settings-reset'), /grid-row: 1/);
+  const range = block(css, '.settings-field input[type="range"]');
+  assert.match(range, /grid-row: 2/);
+  assert.match(range, /margin: 0/);
 
   // Size radios keep role=radio + aria-checked, driven from settings.js.
   const f = fixture();
