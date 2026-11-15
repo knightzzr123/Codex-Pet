@@ -45,38 +45,102 @@
         <h2>设置</h2>
         <button type="button" id="settings-close" class="settings-close" aria-label="关闭设置">×</button>
       </header>
-      <section class="settings-section" aria-labelledby="settings-skins-title">
-        <h3 id="settings-skins-title">皮肤</h3>
+      <p class="settings-intro">改动即时生效；每个分组和单项都能单独重置。</p>
+
+      <section class="settings-section" data-settings-group="appearance" aria-labelledby="settings-appearance-title">
+        <div class="settings-section-head">
+          <h3 id="settings-appearance-title">外观</h3>
+          <button type="button" class="settings-reset settings-reset-group" data-reset-group="appearance">重置本组</button>
+        </div>
         <div id="settings-skins" class="settings-row settings-skins"></div>
         <button type="button" id="settings-import-skin" class="settings-action">导入图片…</button>
-      </section>
-      <section class="settings-section" aria-labelledby="settings-size-title">
-        <h3 id="settings-size-title">大小</h3>
+        <div class="settings-field settings-field-plain">
+          <span class="settings-label">大小
+            <button type="button" class="settings-reset" data-reset-key="sizeLevel" aria-label="重置大小">↺</button>
+          </span>
+          <span id="settings-size-value" class="settings-value">4 档</span>
+        </div>
         <div id="settings-size" class="settings-size" role="radiogroup" aria-label="角色大小"></div>
       </section>
-      <section class="settings-section" aria-labelledby="settings-dialogue-title">
-        <h3 id="settings-dialogue-title">台词</h3>
+
+      <section class="settings-section" data-settings-group="dialogue" aria-labelledby="settings-dialogue-title">
+        <div class="settings-section-head">
+          <h3 id="settings-dialogue-title">对话</h3>
+          <button type="button" class="settings-reset settings-reset-group" data-reset-group="dialogue">重置本组</button>
+        </div>
         <button type="button" id="settings-edit-dialogues" class="settings-action">编辑台词…</button>
-      </section>
-      <section class="settings-section" aria-labelledby="settings-custom-title">
-        <h3 id="settings-custom-title">自定义</h3>
-        <label class="settings-field">气泡偏移 X
+        <div class="settings-field settings-field-plain">
+          <span class="settings-label">气泡停留
+            <button type="button" class="settings-reset" data-reset-key="bubbleSeconds" aria-label="重置气泡停留">↺</button>
+          </span>
+          <span id="settings-bubble-seconds-value" class="settings-value">8 秒</span>
+        </div>
+        <div id="settings-bubble-seconds" class="settings-chips" role="radiogroup" aria-label="气泡停留时间">
+          <button type="button" class="settings-chip" data-bubble-seconds="5">5 秒</button>
+          <button type="button" class="settings-chip" data-bubble-seconds="8">8 秒</button>
+          <button type="button" class="settings-chip" data-bubble-seconds="15">15 秒</button>
+          <button type="button" class="settings-chip" data-bubble-seconds="0">保持显示</button>
+        </div>
+        <div class="settings-toggle-row">
+          <label class="settings-toggle" for="settings-advance"><input id="settings-advance" type="checkbox"> 点人物继续对话</label>
+          <button type="button" class="settings-reset" data-reset-key="advanceOnPetTap" aria-label="重置点人物继续对话">↺</button>
+        </div>
+        <div class="settings-field">
+          <span class="settings-label">气泡偏移 X
+            <button type="button" class="settings-reset" data-reset-key="bubbleOffsetX" aria-label="重置气泡偏移 X">↺</button>
+          </span>
+          <span id="settings-bubble-x-value" class="settings-value">0</span>
           <input id="settings-bubble-x" type="range" min="-48" max="48" step="1" value="0">
-          <span id="settings-bubble-x-value">0</span>
-        </label>
-        <label class="settings-field">气泡偏移 Y
+        </div>
+        <div class="settings-field">
+          <span class="settings-label">气泡偏移 Y
+            <button type="button" class="settings-reset" data-reset-key="bubbleOffsetY" aria-label="重置气泡偏移 Y">↺</button>
+          </span>
+          <span id="settings-bubble-y-value" class="settings-value">0</span>
           <input id="settings-bubble-y" type="range" min="-48" max="48" step="1" value="0">
-          <span id="settings-bubble-y-value">0</span>
-        </label>
-        <label class="settings-field">闲置动作间隔（秒）
-          <input id="settings-idle" type="range" min="5" max="300" step="5" value="45">
-          <span id="settings-idle-value">45</span>
-        </label>
-        <label class="settings-field">透明度
-          <input id="settings-opacity" type="range" min="0.35" max="1" step="0.05" value="1">
-          <span id="settings-opacity-value">100%</span>
-        </label>
+        </div>
       </section>
+
+      <section class="settings-section" data-settings-group="behavior" aria-labelledby="settings-behavior-title">
+        <div class="settings-section-head">
+          <h3 id="settings-behavior-title">行为</h3>
+          <button type="button" class="settings-reset settings-reset-group" data-reset-group="behavior">重置本组</button>
+        </div>
+        <div class="settings-field">
+          <span class="settings-label">闲置动作间隔（秒）
+            <button type="button" class="settings-reset" data-reset-key="idleIntervalSec" aria-label="重置闲置动作间隔">↺</button>
+          </span>
+          <span id="settings-idle-value" class="settings-value">45</span>
+          <input id="settings-idle" type="range" min="5" max="300" step="5" value="45">
+        </div>
+        <div class="settings-toggle-row">
+          <label class="settings-toggle" for="settings-mirror"><input id="settings-mirror" type="checkbox" checked> 贴左侧时转向</label>
+          <button type="button" class="settings-reset" data-reset-key="mirrorOnLeft" aria-label="重置贴左侧转向">↺</button>
+        </div>
+        <div class="settings-toggle-row">
+          <label class="settings-toggle" for="settings-reduced"><input id="settings-reduced" type="checkbox"> 减少动画</label>
+          <button type="button" class="settings-reset" data-reset-key="reducedMotion" aria-label="重置减少动画">↺</button>
+        </div>
+      </section>
+
+      <section class="settings-section" data-settings-group="visibility" aria-labelledby="settings-visibility-title">
+        <div class="settings-section-head">
+          <h3 id="settings-visibility-title">显示</h3>
+          <button type="button" class="settings-reset settings-reset-group" data-reset-group="visibility">重置本组</button>
+        </div>
+        <div class="settings-field">
+          <span class="settings-label">透明度
+            <button type="button" class="settings-reset" data-reset-key="opacity" aria-label="重置透明度">↺</button>
+          </span>
+          <span id="settings-opacity-value" class="settings-value">100%</span>
+          <input id="settings-opacity" type="range" min="0.35" max="1" step="0.05" value="1">
+        </div>
+      </section>
+
+      <footer class="settings-footer">
+        <button type="button" id="settings-reset-all" class="settings-action settings-default">恢复默认</button>
+        <p>不会删除自定义台词、已导入皮肤，也不会移动当前位置。</p>
+      </footer>
     </aside>
   </main>
 </body>

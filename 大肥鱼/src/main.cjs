@@ -9,6 +9,7 @@ const { pathToFileURL } = require('node:url');
 const { readQuota } = require('./quota.cjs');
 const { scopedBounds, snapBounds, clampBounds, shouldShow } = require('./scope.cjs');
 const { writeJsonAtomic, createCoalescedWriter } = require('./persist.cjs');
+const { DEFAULT_SKIN_ID, EXPERIENCE_KEYS, GROUP_KEYS, ALL_RESET_KEYS, resetPreferenceKeys, settingsKeyDefault } = require('./settings-ia.cjs');
 const { createDebouncedShowHide, createDebouncedDiskStatus } = require('./scope-visibility.cjs');
 const { SIZE_SCALES, DEFAULT_SIZE_LEVEL, isSizeLevel, sizeLevelFromPreferences, scaleForLevel } = require('./size.cjs');
 const { getDataDir, getWorkDir } = require('./paths.cjs');
@@ -181,6 +182,19 @@ else {
     applyExperienceChrome();
     updateInputRegion();
     publish();
+  }
+  function resetPreferences(keys = []) {
+    const result = resetPreferenceKeys(preferences, keys);
+    if (!result.changed.length) { publish(); return false; }
+    const changed = new Set(result.changed);
+    if (changed.has('skinId')) setSkin(DEFAULT_SKIN_ID);
+    if (changed.has('sizeLevel')) setSizeLevel(DEFAULT_SIZE_LEVEL);
+    const experience = {};
+    for (const key of result.changed) {
+      if (EXPERIENCE_KEYS.includes(key)) experience[key] = settingsKeyDefault(key);
+    }
+    if (Object.keys(experience).length) setExperiences(experience);
+    return true;
   }
   function resetPlacement() {
     cancelDrag();
@@ -1040,6 +1054,9 @@ else {
     ipcMain.on('pet:edit-dialogues', () => { chooseDialogueEditor(); });
     ipcMain.on('pet:set-experience', (_event, key, value) => setExperience(key, value));
     ipcMain.on('pet:set-experiences', (_event, partial) => setExperiences(partial || {}));
+    ipcMain.on('pet:reset-setting', (_event, key) => { if (typeof key === 'string') resetPreferences([key]); });
+    ipcMain.on('pet:reset-group', (_event, groupId) => { if (typeof groupId === 'string') resetPreferences(GROUP_KEYS[groupId] || []); });
+    ipcMain.on('pet:reset-all', () => resetPreferences(ALL_RESET_KEYS));
     ipcMain.on('pet:reduced-motion', (_event, value) => {
       rendererReducedMotion = value === true;
       if (motionReduced()) cancelSettle({ apply: true });

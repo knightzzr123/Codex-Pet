@@ -232,6 +232,18 @@ function syncSettingsControls() {
     setRange('settings-bubble-y', 'settings-bubble-y-value', experience.bubbleOffsetY || 0);
     setRange('settings-idle', 'settings-idle-value', experience.idleIntervalSec || 45);
     setRange('settings-opacity', 'settings-opacity-value', experience.opacity ?? 1, v => `${Math.round(Number(v) * 100)}%`);
+    const setToggle = (id, value) => { const input = $(id); if (input) input.checked = Boolean(value); };
+    setToggle('settings-advance', experience.advanceOnPetTap);
+    setToggle('settings-mirror', experience.mirrorOnLeft !== false);
+    setToggle('settings-reduced', experience.reducedMotion);
+    const seconds = experience.bubbleSeconds ?? 8;
+    const secondsValue = $('settings-bubble-seconds-value');
+    if (secondsValue) secondsValue.textContent = seconds === 0 ? '保持显示' : `${seconds} 秒`;
+    const sizeValue = $('settings-size-value');
+    if (sizeValue) sizeValue.textContent = `${sizeLevel} 档`;
+    for (const button of panel.querySelectorAll?.('[data-bubble-seconds]') || []) {
+      button.classList.toggle('is-active', Number(button.getAttribute('data-bubble-seconds')) === seconds);
+    }
   } catch {
     // Unit fixture DOM is intentionally incomplete.
   }
@@ -531,12 +543,39 @@ for (const [id, key, cast] of [
   $(id)?.addEventListener('input', event => {
     const value = cast(event.target.value);
     window.petAPI.setExperience(key, value);
-    if (key === 'bubbleOffsetX') $('settings-bubble-x-value').textContent = String(value);
-    if (key === 'bubbleOffsetY') $('settings-bubble-y-value').textContent = String(value);
+    // Apply the visible part immediately; the main process persists the same
+    // value and returns the canonical (clamped) state a moment later.
+    if (key === 'bubbleOffsetX') {
+      document.documentElement?.style?.setProperty('--bubble-offset-x', `${value}px`);
+      $('settings-bubble-x-value').textContent = String(value);
+    }
+    if (key === 'bubbleOffsetY') {
+      document.documentElement?.style?.setProperty('--bubble-offset-y', `${value}px`);
+      $('settings-bubble-y-value').textContent = String(value);
+    }
     if (key === 'idleIntervalSec') $('settings-idle-value').textContent = String(value);
-    if (key === 'opacity') $('settings-opacity-value').textContent = `${Math.round(value * 100)}%`;
+    if (key === 'opacity') {
+      document.documentElement?.style?.setProperty('--pet-opacity', String(Math.max(0.35, Math.min(1, value))));
+      $('settings-opacity-value').textContent = `${Math.round(value * 100)}%`;
+    }
   });
 }
+const setToggle = (id, key) => $(id)?.addEventListener('change', event => {
+  window.petAPI.setExperience?.(key, event.target.checked);
+});
+setToggle('settings-advance', 'advanceOnPetTap');
+setToggle('settings-mirror', 'mirrorOnLeft');
+setToggle('settings-reduced', 'reducedMotion');
+for (const button of document.querySelectorAll?.('[data-bubble-seconds]') || []) {
+  button.addEventListener('click', () => window.petAPI.setExperience?.('bubbleSeconds', Number(button.getAttribute('data-bubble-seconds'))));
+}
+for (const button of document.querySelectorAll?.('[data-reset-key]') || []) {
+  button.addEventListener('click', () => window.petAPI.resetSetting?.(button.getAttribute('data-reset-key')));
+}
+for (const button of document.querySelectorAll?.('[data-reset-group]') || []) {
+  button.addEventListener('click', () => window.petAPI.resetGroup?.(button.getAttribute('data-reset-group')));
+}
+$('settings-reset-all')?.addEventListener('click', () => window.petAPI.resetAll?.());
 window.petAPI.onOpenSettings?.(() => setSettingsOpen(true));
 
 function receiveState(next) {

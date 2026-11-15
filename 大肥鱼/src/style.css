@@ -140,6 +140,24 @@ body.multiple #other-windows { max-height: 34px; }
   margin-top: 8px; font-size: 12px; font-weight: 700; color: #586b9e;
 }
 .settings-field input[type="range"] { grid-column: 1 / -1; width: 100%; min-height: 32px; accent-color: #273976; }
+.settings-intro { margin: 0 0 4px; font-size: 11px; line-height: 15px; color: #7b8db8; }
+.settings-section-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.settings-section-head h3 { margin: 0; }
+.settings-reset {
+  min-height: 30px; min-width: 30px; padding: 3px 9px; border-radius: 999px;
+  background: #edf2ff; color: #566eb0; font-size: 12px; font-weight: 800;
+}
+.settings-reset-group { font-size: 11px; font-weight: 700; }
+.settings-label { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.settings-value { color: #566eb0; font-variant-numeric: tabular-nums; }
+.settings-toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; }
+.settings-toggle { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 700; color: #586b9e; }
+.settings-toggle input { width: 18px; height: 18px; accent-color: #273976; }
+.settings-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.settings-chips .settings-chip { min-height: 32px; padding: 4px 10px; font-size: 12px; }
+.settings-footer { margin-top: 14px; padding-top: 10px; border-top: 1px solid #d9e2f7; }
+.settings-footer p { margin: 6px 0 0; font-size: 10px; line-height: 14px; color: #8a9ac0; }
+.settings-default { background: #273976; color: #fffefc; }
 
 body.reduced-motion #bubble, body.reduced-motion .bubble-panel, body.reduced-motion .thought-dot,
 body.reduced-motion #pet, body.reduced-motion #pet-image, body.reduced-motion #speech-anchor,
