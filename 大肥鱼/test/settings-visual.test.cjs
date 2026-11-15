@@ -69,7 +69,7 @@ test('V1 外观页首屏紧凑：皮肤卡片、导入区、大小按钮与间�
   assert.match(sizeBox, /flex-wrap: wrap/);
   assert.match(sizeBox, /gap: 6px/);
 
-  assert.match(block(css, '.settings-content {'), /padding: var\(--space-4\) var\(--space-5\) var\(--space-6\)/);
+  assert.match(block(css, '.settings-content {'), /padding: var\(--space-4\) var\(--space-5\) var\(--space-4\)/);
   assert.match(block(css, '.settings-kicker-title'), /margin: var\(--space-4\) 0 var\(--space-2\)/);
 
   const reset = block(css, '.settings-reset[data-reset-key]');
@@ -172,10 +172,18 @@ test('V2 卡片主行只放名称，来源进小号副行，完整名留在 titl
   for (const card of cards) {
     const name = card.children.find(child => child.className === 'settings-skin-name');
     assert.ok(name, 'card has a .settings-skin-name line');
-    assert.equal(name.textContent, card.title);
+    // R3b: the visible name keeps the separator with the following word, while
+    // title/aria-label keep the original spacing.
+    assert.equal(name.textContent, card.title.replace(/ · /g, ' \u00b7\u00a0'));
+    assert.doesNotMatch(name.textContent, /· /);
     assert.match(card.getAttribute('aria-label'), new RegExp(card.title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     assert.equal(card.getAttribute('role'), 'radio');
   }
+  assert.equal(cards[1].children.find(child => child.className === 'settings-skin-name').textContent,
+    '紫角玫瑰 ·\u00a0半身');
+  assert.equal(cards[1].title, '紫角玫瑰 · 半身');
+  assert.equal(cards[1].getAttribute('aria-label'), '当前角色：紫角玫瑰 · 半身');
+  assert.equal(cards[2].getAttribute('aria-label'), '切换到：海洋包 · 鲸鱼娘');
   assert.equal(cards[1].getAttribute('aria-checked'), 'true');
   assert.equal(cards[1].className, 'settings-skin-card is-active');
   assert.equal(cards[0].getAttribute('aria-checked'), 'false');
@@ -184,9 +192,43 @@ test('V2 卡片主行只放名称，来源进小号副行，完整名留在 titl
   assert.equal(cards[1].children[0].className, 'settings-chip-thumb');
   assert.equal(cards[1].children[0].getAttribute('aria-hidden'), 'true');
   assert.match(script, /const name = document\.createElement\('span'\);\s*name\.className = 'settings-skin-name';/);
-  assert.match(script, /name\.textContent = label;/);
+  assert.match(script, /name\.textContent = skinDisplayName\(skin\);/);
   assert.match(script, /function skinLabel\(skin\)/);
   assert.match(script, /name\.replace\(\/\^默认/);
+  assert.match(script, /function skinDisplayName\(skin\)/);
+  assert.ok(script.includes("return skinLabel(skin).replace(/ · /g, ' \\u00b7\\u00a0');"));
+});
+
+test('R3b-1 渲染皮肤名称时把分隔符后的空格换成不换行空格', () => {
+  assert.ok(script.includes("return skinLabel(skin).replace(/ · /g, ' \\u00b7\\u00a0');"));
+  const f = fixture();
+  f.applyState({
+    sizeLevel: 4,
+    skin: { id: 'rose', name: '紫角玫瑰 · 半身', kind: 'builtin' },
+    skins: [
+      { id: 'default', name: '默认 · 鲸鱼娘', kind: 'builtin' },
+      { id: 'rose', name: '紫角玫瑰 · 半身', kind: 'builtin' },
+      { id: 'pack:a', name: '海洋包 · 鲸鱼娘', kind: 'pack' },
+      { id: 'plain', name: '没有分隔符', kind: 'image' }
+    ],
+    experience: {}
+  });
+  const cards = f.get('settings-skins').children;
+  const nameOf = card => card.children.find(child => child.className === 'settings-skin-name').textContent;
+  assert.equal(nameOf(cards[1]), '紫角玫瑰 ·\u00a0半身');
+  assert.equal(nameOf(cards[2]), '海洋包 ·\u00a0鲸鱼娘');
+  assert.equal(nameOf(cards[3]), '没有分隔符');
+  assert.equal(cards[1].title, '紫角玫瑰 · 半身');
+  assert.equal(cards[1].getAttribute('aria-label'), '当前角色：紫角玫瑰 · 半身');
+  assert.equal(cards[2].getAttribute('aria-label'), '切换到：海洋包 · 鲸鱼娘');
+  for (const card of cards) {
+    const text = nameOf(card);
+    // Any middot in the rendered name must be followed by U+00A0, never a
+    // regular space, so "·" cannot be stranded at the end of a line.
+    for (let index = 0; index < text.length; index += 1) {
+      if (text[index] === '·') assert.equal(text[index + 1], '\u00a0', `${card.title}: middot followed by NBSP`);
+    }
+  }
 });
 
 test('V3 删除重复区块标题，控件行用 label/for 与 radiogroup 关联', () => {
@@ -225,4 +267,42 @@ test('V3 删除重复区块标题，控件行用 label/for 与 radiogroup 关联
   }
   assert.match(script, /button\.setAttribute\('role', 'radio'\)/);
   assert.match(script, /button\.setAttribute\('aria-checked', String\(active\)\)/);
+});
+
+test('R3b-2 高对比提示移到皮肤网格正下方，间距 6 / 12 / 16', () => {
+  // Exactly one contrast hint, and it sits between the grid and the drop zone.
+  assert.equal(html.split('高对比主题下预览图可能保持原色。').length - 1, 1);
+  const grid = at('id="settings-skins"');
+  const hint = at('class="settings-hint settings-hint-contrast"');
+  const drop = at('id="settings-zip-drop"');
+  const preview = at('id="settings-zip-preview"');
+  const opacity = at('id="settings-opacity"');
+  assert.ok(grid < hint, 'hint follows the skin grid');
+  assert.ok(hint < drop, 'hint is above the import drop zone');
+  assert.ok(drop < preview, 'preview card stays under the import zone');
+  assert.ok(preview < opacity, 'opacity row stays after the import area');
+  assert.match(html, /<p class="settings-hint settings-hint-contrast">高对比主题下预览图可能保持原色。<\/p>/);
+
+  // 6px above the hint; 12px below it. The drop zone has no top margin, so the
+  // hint's 12px bottom margin is the gap to the import zone (margins collapse).
+  assert.match(block(css, '.settings-hint-contrast'), /margin: 6px 0 12px/);
+  assert.match(block(css, '.settings-drop {'), /margin-top: 0/);
+  // 16px between the import zone and the opacity control row.
+  assert.match(block(css, '.settings-opacity-row'), /margin-top: var\(--space-4\)/);
+  assert.match(html, /class="settings-field settings-opacity-row"/);
+  // The gap from the import area to the opacity row is therefore 16px, and the
+  // rest of the first screen (skin grid + size 1-10) is unchanged.
+  assert.match(block(css, '.settings-skin-card {'), /width: 112px/);
+  assert.match(block(css, '.settings-size-btn {'), /width: 32px/);
+});
+
+test('R3b-3 预览卡标题与描述间距 8px，导入/取消按钮右对齐', () => {
+  const preview = block(css, '.settings-preview { margin-top');
+  assert.match(preview, /gap: var\(--space-2\)/);
+  assert.match(block(css, '.settings-preview h3'), /margin: 0;/);
+  assert.match(block(css, '#settings-zip-preview-summary'), /margin: 0/);
+  assert.match(block(css, '.settings-preview .settings-actions'), /justify-content: flex-end/);
+  // The title, summary and actions live in the same card, in that order.
+  assert.ok(at('id="settings-zip-preview-title"') < at('id="settings-zip-preview-summary"'));
+  assert.ok(at('id="settings-zip-preview-summary"') < at('id="settings-zip-confirm"'));
 });

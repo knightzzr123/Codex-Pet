@@ -35,6 +35,7 @@
           </div>
           <h3 class="settings-kicker-title">皮肤</h3>
           <div id="settings-skins" class="settings-skin-grid" role="radiogroup" aria-label="角色皮肤"></div>
+          <p class="settings-hint settings-hint-contrast">高对比主题下预览图可能保持原色。</p>
           <div id="settings-zip-drop" class="settings-drop" data-state="idle" tabindex="0" role="button" aria-label="将 .zip 或皮肤包文件夹拖到此处">
             <strong id="settings-drop-title">将 .zip 或皮肤包文件夹拖到此处</strong>
             <span id="settings-drop-detail">一次一个。也可以选择文件。</span>
@@ -52,9 +53,8 @@
               <button type="button" id="settings-zip-cancel" class="settings-action">取消</button>
             </div>
           </section>
-          <p class="settings-hint">高对比主题下预览图可能保持原色。</p>
           <button type="button" id="settings-delete-skin" class="settings-action settings-link" hidden>删除当前已导入的皮肤</button>
-          <div class="settings-field">
+          <div class="settings-field settings-opacity-row">
             <label class="settings-label" for="settings-opacity">透明度</label>
             <span id="settings-opacity-value" class="settings-value">100%</span>
             <button type="button" class="settings-reset" data-reset-key="opacity" aria-label="重置透明度" title="恢复默认透明度">↺</button>

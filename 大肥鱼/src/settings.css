@@ -135,7 +135,10 @@ button { cursor: pointer; }
 :root { scrollbar-color: var(--scrollbar-thumb) transparent; }
 .settings-content {
   overflow: auto;
-  padding: var(--space-4) var(--space-5) var(--space-6);
+  /* R3b: the appearance page now runs ~14px taller (hint moved under the skin
+     grid), so the scroll container's bottom padding drops 24→16 to keep the
+     960x680 first screen from growing a scrollbar. */
+  padding: var(--space-4) var(--space-5) var(--space-4);
   /* Chromium honours the ::-webkit-scrollbar rules below only while the
      standard property is `auto`; the inherited themed value would replace the
      10px track with the platform default. */
@@ -158,6 +161,10 @@ button { cursor: pointer; }
 }
 .settings-card { display: flex; flex-direction: column; gap: var(--space-3); }
 .settings-hint, .settings-footer p { margin: var(--space-1) 0 0; color: var(--muted); font-size: 13px; }
+/* R3b: this hint belongs to the skin grid, so it sits directly underneath it:
+   6px above the hint, 12px between the hint and the import drop zone. */
+.settings-hint-contrast { margin: 6px 0 12px; }
+.settings-opacity-row { margin-top: var(--space-4); }
 .settings-actions, .settings-row, .settings-size, .settings-chips { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 .settings-action, .settings-chip, .settings-size-btn, .settings-reset {
   min-height: 44px; min-width: 44px; padding: var(--space-2) var(--space-3);
@@ -168,7 +175,7 @@ button { cursor: pointer; }
 .settings-chip-thumb { width: 28px; height: 28px; border-radius: 8px; object-fit: cover; background: var(--bg); }
 .settings-chip.is-active, .settings-size-btn.is-active { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
 .settings-drop {
-  margin-top: var(--space-4);
+  margin-top: 0;
   display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-3);
   border-style: dashed; color: var(--muted); min-height: 56px; padding: 8px 12px;
 }
@@ -188,8 +195,10 @@ button { cursor: pointer; }
   flex: 1 1 100%;
 }
 .settings-drop.is-drag { border-color: var(--accent); color: var(--text); }
-.settings-preview { margin-top: var(--space-3); }
-.settings-preview h3 { margin: 0 0 var(--space-2); font-size: 15px; }
+.settings-preview { margin-top: var(--space-3); gap: var(--space-2); }
+.settings-preview h3 { margin: 0; font-size: 15px; }
+#settings-zip-preview-summary { margin: 0; }
+.settings-preview .settings-actions { justify-content: flex-end; }
 .settings-warning { margin: var(--space-2) 0 0; padding: var(--space-2) var(--space-3); border-radius: var(--radius-sm); background: var(--warning-bg); color: var(--warning); }
 .settings-status:empty { display: none; }
 .settings-notice {

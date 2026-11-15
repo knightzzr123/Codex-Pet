@@ -37,6 +37,13 @@ function skinOrigin(skin) {
   return '';
 }
 
+// R3b: the card's visible name turns the space after the " · " separator into a
+// no-break space, so the separator can never be the last thing on a line.
+// title/aria-label keep the original name.
+function skinDisplayName(skin) {
+  return skinLabel(skin).replace(/ · /g, ' \u00b7\u00a0');
+}
+
 function selectCategory(id) {
   const tabs = nodes($('settings-nav'), '[role="tab"]');
   for (const tab of tabs) {
@@ -80,7 +87,7 @@ function syncSettingsControls() {
         }
         const name = document.createElement('span');
         name.className = 'settings-skin-name';
-        name.textContent = label;
+        name.textContent = skinDisplayName(skin);
         const origin = document.createElement('span');
         origin.className = 'settings-skin-origin';
         origin.textContent = skinOrigin(skin);
