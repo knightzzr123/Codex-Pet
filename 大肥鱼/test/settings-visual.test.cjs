@@ -84,3 +84,93 @@ test('V1 外观页首屏紧凑：皮肤卡片、导入区、大小按钮与间�
   assert.ok(at('id="settings-zip-drop"') < at('id="settings-zip-preview"'));
   assert.ok(at('id="settings-zip-preview"') < at('id="settings-opacity"'));
 });
+
+function fixture() {
+  const elements = new Map();
+  const listeners = new Map();
+  const doc = {
+    activeElement: null,
+    body: { classList: { toggle() {} } },
+    documentElement: { dataset: {} },
+    getElementById: id => get(id),
+    createElement: tag => Object.assign(new Element('created'), { tag }),
+    querySelectorAll: () => [],
+    addEventListener: (name, fn) => listeners.set(name, fn)
+  };
+  class Element {
+    constructor(id) {
+      this.id = id; this.handlers = new Map(); this.classList = { add() {}, remove() {}, toggle() {} };
+      this.textContent = ''; this.className = ''; this.hidden = false; this.focused = false; this.children = [];
+      this.dataset = {}; this.attrs = new Map(); this.focusables = [];
+    }
+    addEventListener(name, handler) { this.handlers.set(name, handler); }
+    replaceChildren(...children) { this.children = children; }
+    append(...children) { this.children.push(...children); }
+    setAttribute(name, value) { this.attrs.set(name, String(value)); }
+    getAttribute(name) { return this.attrs.get(name) ?? null; }
+    querySelectorAll() { return this.focusables; }
+    focus() { this.focused = true; doc.activeElement = this; }
+  }
+  const get = id => {
+    if (!elements.has(id)) elements.set(id, new Element(id));
+    return elements.get(id);
+  };
+  const vm = require('node:vm');
+  const window = {
+    settingsAPI: undefined,
+    addEventListener: (name, fn) => listeners.set(name, fn),
+    location: { search: '' }
+  };
+  const context = vm.createContext({
+    window, document: doc, URLSearchParams, setTimeout, clearTimeout,
+    globalThis: { location: window.location }
+  });
+  vm.runInContext(script, context);
+  return { get, doc, window, applyState: window.__settingsTest.applyState };
+}
+
+test('V2 卡片主行只放名称，来源进小号副行，完整名留在 title/aria-label', () => {
+  const nameRule = block(css, '.settings-skin-name');
+  assert.match(nameRule, /word-break: keep-all/);
+  assert.match(nameRule, /overflow-wrap: anywhere/);
+  assert.match(nameRule, /-webkit-line-clamp: 2/);
+  assert.match(nameRule, /-webkit-box-orient: vertical/);
+  assert.match(nameRule, /text-align: center/);
+  assert.match(nameRule, /line-height: 1.3/);
+  const originRule = block(css, '.settings-skin-origin');
+  assert.match(originRule, /font-size: 11px/);
+  assert.match(originRule, /color: var\(--muted\)/);
+
+  const f = fixture();
+  f.applyState({
+    sizeLevel: 4,
+    skin: { id: 'rose', name: '紫角玫瑰 · 半身', kind: 'builtin' },
+    skins: [
+      { id: 'default', name: '默认 · 鲸鱼娘', kind: 'builtin', thumbnailUrl: 'data:image/svg+xml,<svg/>' },
+      { id: 'rose', name: '紫角玫瑰 · 半身', kind: 'builtin', thumbnailUrl: 'data:image/svg+xml,<svg/>' },
+      { id: 'pack:abc:whale', name: '海洋包 · 鲸鱼娘', kind: 'pack' },
+      { id: 'image:one', name: '自定义图', kind: 'image' }
+    ],
+    experience: {}
+  });
+  const cards = f.get('settings-skins').children;
+  assert.equal(cards.length, 4);
+  assert.deepEqual(cards.map(card => card.children.find(child => child.className === 'settings-skin-origin')?.textContent),
+    ['默认', '内置', '导入', '导入']);
+  for (const card of cards) {
+    const name = card.children.find(child => child.className === 'settings-skin-name');
+    assert.ok(name, 'card has a .settings-skin-name line');
+    assert.equal(name.textContent, card.title);
+    assert.match(card.getAttribute('aria-label'), new RegExp(card.title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    assert.equal(card.getAttribute('role'), 'radio');
+  }
+  assert.equal(cards[1].getAttribute('aria-checked'), 'true');
+  assert.equal(cards[1].className, 'settings-skin-card is-active');
+  assert.equal(cards[0].getAttribute('aria-checked'), 'false');
+  assert.equal(cards[2].children[0].tag, 'span', 'a card without thumbnail starts with the name line');
+  assert.equal(cards[1].children[0].tag, 'img');
+  assert.equal(cards[1].children[0].className, 'settings-chip-thumb');
+  assert.equal(cards[1].children[0].getAttribute('aria-hidden'), 'true');
+  assert.match(script, /const name = document\.createElement\('span'\);\s*name\.className = 'settings-skin-name';/);
+  assert.match(script, /name\.textContent = skin\.name;/);
+});

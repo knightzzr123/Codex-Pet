@@ -19,6 +19,16 @@ function applyTheme() {
   if (theme === 'dark' || theme === 'light') document.documentElement.dataset.theme = theme;
 }
 
+// V2: the card's primary line is the bare skin name; where the skin comes from
+// moves to a small secondary line ("默认" / "内置" / "导入").
+function skinOrigin(skin) {
+  if (!skin) return '';
+  if (skin.id === 'default') return '默认';
+  if (skin.kind === 'builtin') return '内置';
+  if (skin.kind === 'image' || skin.kind === 'pack') return '导入';
+  return '';
+}
+
 function selectCategory(id) {
   const tabs = nodes($('settings-nav'), '[role="tab"]');
   for (const tab of tabs) {
@@ -42,21 +52,30 @@ function syncSettingsControls() {
       const button = document.createElement('button');
       const active = state.skin?.id === skin.id;
       button.type = 'button';
-        button.className = `settings-skin-card${active ? ' is-active' : ''}`;
+      button.className = `settings-skin-card${active ? ' is-active' : ''}`;
       button.title = skin.name;
       button.setAttribute?.('role', 'radio');
       button.setAttribute?.('aria-checked', String(active));
       button.setAttribute?.('aria-pressed', String(active));
       button.setAttribute?.('aria-label', `${active ? '当前角色' : '切换到'}：${skin.name}`);
-      if (skin.thumbnailUrl && typeof button.append === 'function') {
-        const image = document.createElement('img');
-        image.className = 'settings-chip-thumb';
-        image.src = skin.thumbnailUrl;
-        image.alt = '';
-        image.setAttribute?.('aria-hidden', 'true');
-        const label = document.createElement('span');
-        label.textContent = skin.name;
-        button.append(image, label);
+      // V2: the card shows one clamped name line plus a small origin line, so
+      // only whole names wrap; the full name stays in title/aria-label.
+      if (typeof button.append === 'function') {
+        if (skin.thumbnailUrl) {
+          const image = document.createElement('img');
+          image.className = 'settings-chip-thumb';
+          image.src = skin.thumbnailUrl;
+          image.alt = '';
+          image.setAttribute?.('aria-hidden', 'true');
+          button.append(image);
+        }
+        const name = document.createElement('span');
+        name.className = 'settings-skin-name';
+        name.textContent = skin.name;
+        const origin = document.createElement('span');
+        origin.className = 'settings-skin-origin';
+        origin.textContent = skinOrigin(skin);
+        button.append(name, origin);
       } else button.textContent = skin.name;
       button.addEventListener('click', () => window.settingsAPI?.setSkin?.(skin.id));
       return button;
@@ -591,10 +610,10 @@ async function beginClose() {
 function mockState() {
   return {
     version: '3.4.0', displayVersion: 'Codex-Pet-V1.4', sizeLevel: 4,
-    skin: { id: 'default', name: '默认 · 鲸鱼娘' },
+    skin: { id: 'default', name: '默认 · 鲸鱼娘', kind: 'builtin' },
     skins: [
-      { id: 'default', name: '默认 · 鲸鱼娘', thumbnailUrl: 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="72" height="72"><rect width="72" height="72" rx="16" fill="#d7e3ff"/><text x="36" y="46" text-anchor="middle" font-size="32">🐟</text></svg>') },
-      { id: 'rose', name: '紫角玫瑰 · 半身', thumbnailUrl: 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="72" height="72"><rect width="72" height="72" rx="16" fill="#f3d7e4"/><text x="36" y="46" text-anchor="middle" font-size="32">🌹</text></svg>') }
+      { id: 'default', name: '默认 · 鲸鱼娘', kind: 'builtin', thumbnailUrl: 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="72" height="72"><rect width="72" height="72" rx="16" fill="#d7e3ff"/><text x="36" y="46" text-anchor="middle" font-size="32">🐟</text></svg>') },
+      { id: 'rose', name: '紫角玫瑰 · 半身', kind: 'builtin', thumbnailUrl: 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="72" height="72"><rect width="72" height="72" rx="16" fill="#f3d7e4"/><text x="36" y="46" text-anchor="middle" font-size="32">🌹</text></svg>') }
     ],
     experience: {
       bubbleSeconds: 8, advanceOnPetTap: false, bubbleOffsetX: 0, bubbleOffsetY: 0,
