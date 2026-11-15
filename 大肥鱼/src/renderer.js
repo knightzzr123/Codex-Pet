@@ -259,6 +259,7 @@ function syncSettingsControls() {
         button.className = 'settings-size-btn';
         button.setAttribute('data-level', String(level));
         button.textContent = `${level}`;
+        button.setAttribute('role', 'radio');
         button.setAttribute('aria-label', `大小 ${level} 档`);
         button.addEventListener('click', () => window.petAPI.setSizeLevel?.(level));
         sizeBox.append(button);
@@ -266,7 +267,9 @@ function syncSettingsControls() {
     }
     if (sizeBox && typeof sizeBox.querySelectorAll === 'function') {
       for (const button of sizeBox.querySelectorAll('.settings-size-btn')) {
-        button.classList.toggle('is-active', Number(button.getAttribute('data-level')) === sizeLevel);
+        const active = Number(button.getAttribute('data-level')) === sizeLevel;
+        button.classList.toggle('is-active', active);
+        button.setAttribute('aria-checked', String(active));
       }
     }
     const setRange = (id, valueId, value, format = v => v) => {
@@ -289,7 +292,9 @@ function syncSettingsControls() {
     const sizeValue = $('settings-size-value');
     if (sizeValue) sizeValue.textContent = `${sizeLevel} 档`;
     for (const button of panel.querySelectorAll?.('[data-bubble-seconds]') || []) {
-      button.classList.toggle('is-active', Number(button.getAttribute('data-bubble-seconds')) === seconds);
+      const active = Number(button.getAttribute('data-bubble-seconds')) === seconds;
+      button.classList.toggle('is-active', active);
+      button.setAttribute('aria-checked', String(active));
     }
   } catch {
     // Unit fixture DOM is intentionally incomplete.
@@ -297,7 +302,13 @@ function syncSettingsControls() {
 }
 
 function setSettingsOpen(open) {
-  settingsOpen = Boolean(open);
+  const next = Boolean(open);
+  if (next === settingsOpen) {
+    if (next) $('settings-close')?.focus?.({ preventScroll: true });
+    return;
+  }
+  if (next) settingsReturnFocus = document.activeElement || null;
+  settingsOpen = next;
   const panel = $('settings-panel');
   if (!panel) return;
   panel.hidden = !settingsOpen;

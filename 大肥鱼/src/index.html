@@ -79,10 +79,10 @@
           <span id="settings-bubble-seconds-value" class="settings-value">8 秒</span>
         </div>
         <div id="settings-bubble-seconds" class="settings-chips" role="radiogroup" aria-label="气泡停留时间">
-          <button type="button" class="settings-chip" data-bubble-seconds="5">5 秒</button>
-          <button type="button" class="settings-chip" data-bubble-seconds="8">8 秒</button>
-          <button type="button" class="settings-chip" data-bubble-seconds="15">15 秒</button>
-          <button type="button" class="settings-chip" data-bubble-seconds="0">保持显示</button>
+          <button type="button" class="settings-chip" role="radio" aria-checked="false" data-bubble-seconds="5">5 秒</button>
+          <button type="button" class="settings-chip" role="radio" aria-checked="true" data-bubble-seconds="8">8 秒</button>
+          <button type="button" class="settings-chip" role="radio" aria-checked="false" data-bubble-seconds="15">15 秒</button>
+          <button type="button" class="settings-chip" role="radio" aria-checked="false" data-bubble-seconds="0">保持显示</button>
         </div>
         <div class="settings-toggle-row">
           <label class="settings-toggle" for="settings-advance"><input id="settings-advance" type="checkbox"> 点人物继续对话</label>
@@ -93,14 +93,14 @@
             <button type="button" class="settings-reset" data-reset-key="bubbleOffsetX" aria-label="重置气泡偏移 X">↺</button>
           </span>
           <span id="settings-bubble-x-value" class="settings-value">0</span>
-          <input id="settings-bubble-x" type="range" min="-48" max="48" step="1" value="0">
+          <input id="settings-bubble-x" type="range" min="-48" max="48" step="1" value="0" aria-label="气泡水平偏移">
         </div>
         <div class="settings-field">
           <span class="settings-label">气泡偏移 Y
             <button type="button" class="settings-reset" data-reset-key="bubbleOffsetY" aria-label="重置气泡偏移 Y">↺</button>
           </span>
           <span id="settings-bubble-y-value" class="settings-value">0</span>
-          <input id="settings-bubble-y" type="range" min="-48" max="48" step="1" value="0">
+          <input id="settings-bubble-y" type="range" min="-48" max="48" step="1" value="0" aria-label="气泡垂直偏移">
         </div>
       </section>
 
@@ -114,7 +114,7 @@
             <button type="button" class="settings-reset" data-reset-key="idleIntervalSec" aria-label="重置闲置动作间隔">↺</button>
           </span>
           <span id="settings-idle-value" class="settings-value">45</span>
-          <input id="settings-idle" type="range" min="5" max="300" step="5" value="45">
+          <input id="settings-idle" type="range" min="5" max="300" step="5" value="45" aria-label="闲置动作间隔秒数">
         </div>
         <div class="settings-toggle-row">
           <label class="settings-toggle" for="settings-mirror"><input id="settings-mirror" type="checkbox" checked> 贴左侧时转向</label>
