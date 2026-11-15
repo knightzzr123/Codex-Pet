@@ -147,7 +147,7 @@ function showPreview(preview) {
   const duplicate = preview?.duplicate;
   if (warning) {
     warning.hidden = !duplicate;
-    if (duplicate?.kind === 'content') warning.textContent = `已导入过「${duplicate.existingName || preview.name}」。继续将使用已有文件，不会复制第二份。`;
+    if (duplicate?.kind === 'content') warning.textContent = `已有同名内容「${duplicate.existingName || preview.name}」。确认后使用已有文件，不会复制第二份。`;
     else if (duplicate) warning.textContent = `已有同名皮肤包「${duplicate.existingName}」。导入将作为新包保留，旧包不会被覆盖。`;
     else warning.textContent = '';
   }
@@ -207,7 +207,7 @@ function setDropState(state, detail) {
     hover: ['松开以预览皮肤包', '将开始校验，写入前可以取消。'],
     illegal: ['只能导入 .zip 或皮肤包文件夹', detail || '一次只能导入一个皮肤包'],
     busy: ['正在校验…', '请稍候，完成前不能再次投放。'],
-    success: ['预览已就绪', '请在下方确认或取消。'],
+    success: ['导入成功', detail || '皮肤包已写入。'],
     error: ['导入失败', detail || '请重试。']
   };
   const pair = labels[state] || labels.idle;
@@ -219,8 +219,8 @@ function setDropState(state, detail) {
     const button = $(id);
     if (button) button.disabled = busy;
   }
-  if (state === 'success') drop.hidden = true;
-  if (state === 'idle' || state === 'error' || state === 'illegal') drop.hidden = false;
+  if (state === 'preview') drop.hidden = true;
+  else if (state !== 'busy') drop.hidden = false;
 }
 
 function isHiddenDeep(node) {
@@ -233,69 +233,79 @@ function isHiddenDeep(node) {
   return false;
 }
 
+function rejectPack(result) {
+  const message = result?.error || '无法导入这个皮肤包。';
+  if (result?.code === 'PATH_REJECTED') {
+    setDropState('illegal', '只能导入 .zip 或皮肤包文件夹');
+    liveAssert(message);
+    return;
+  }
+  setDropState('error', message);
+  liveAssert(message);
+  setStatus(message);
+}
+
 async function previewToken(token) {
-  if (!token || !window.settingsAPI?.previewZip) return;
+  if (!token || !window.settingsAPI?.previewSkinPack) return;
   pendingToken = token;
+  setDropState('busy');
   setStatus('正在读取皮肤包…');
   try {
-    const preview = await window.settingsAPI.previewZip(token);
-    if (!preview || preview.error) {
-      clearPreview();
-      setDropState('error', preview?.error || '无法预览这个 ZIP。');
-      liveAssert(preview?.error || '无法预览这个 ZIP。');
-      setStatus(preview?.error || '无法预览这个 ZIP。');
+    const preview = await window.settingsAPI.previewSkinPack(token);
+    if (!preview?.ok) {
+      rejectPack(preview);
       return;
     }
     showPreview(preview);
-    setDropState('success');
+    setDropState('preview');
     live(`皮肤包「${preview.name || ''}」已就绪，请确认导入`);
     setStatus('');
   } catch (error) {
-    clearPreview();
-    setStatus(error?.message || '无法预览这个 ZIP。');
+    setDropState('error', error?.message || '无法预览这个皮肤包。');
   }
 }
 
-async function chooseZip() {
+async function choosePack(mode) {
   setDropState('busy');
-  const chosen = await window.settingsAPI?.chooseZip?.();
-  if (chosen?.token) await previewToken(chosen.token);
-  else if (chosen?.image) {
+  const chosen = await window.settingsAPI?.chooseSkinPack?.(mode);
+  if (chosen?.ok && chosen.token) await previewToken(chosen.token);
+  else if (chosen?.ok && chosen.image) {
     setDropState('idle');
     live(chosen.canceled ? '已取消图片导入' : '图片已导入');
-  } else setDropState('idle');
-}
-
-async function chooseFolder() {
-  setDropState('busy');
-  const chosen = await window.settingsAPI?.chooseFolder?.();
-  if (chosen?.token) await previewToken(chosen.token);
+  } else if (chosen?.ok && chosen.canceled) setDropState('idle');
+  else if (chosen && chosen.ok === false) rejectPack(chosen);
   else setDropState('idle');
 }
 
 let importingZip = false;
 async function submitZip() {
-  if (importingZip || !pendingToken || !window.settingsAPI?.importZip) return;
+  if (importingZip || !pendingToken || !window.settingsAPI?.commitSkinPack) return;
   importingZip = true;
   setDropState('busy');
   try {
-    const result = await window.settingsAPI.importZip({ token: pendingToken, confirmSame: currentPreview?.needsConfirm === true });
+    const result = await window.settingsAPI.commitSkinPack({
+      token: pendingToken,
+      acceptSameName: currentPreview?.needsConfirm === true
+    });
     if (result?.code === 'PACK_CONFIRM') {
-      showPreview({ ...(currentPreview || {}), needsConfirm: true, name: result.name || currentPreview?.name });
-      setDropState('success');
+      showPreview({
+        ...(currentPreview || {}),
+        needsConfirm: true,
+        duplicate: { kind: 'content', existingName: currentPreview?.duplicate?.existingName || currentPreview?.name || '这个皮肤包' }
+      });
+      setDropState('preview');
+      liveAssert(result.error || '已有同名皮肤包。确认后才会继续。');
       return;
     }
     if (!result?.ok) {
-      setDropState('error', result?.error || '皮肤包导入失败。请重试。');
-      liveAssert(result?.error || '皮肤包导入失败。');
-      setStatus(result?.error || '皮肤包导入失败。');
+      rejectPack(result);
       return;
     }
     const done = result.pack?.name ? `已导入皮肤包「${result.pack.name}」。` : '皮肤包已导入。';
     setStatus(done);
     live(done);
     clearPreview();
-    setDropState('idle');
+    setDropState('success', done);
   } finally {
     importingZip = false;
   }
@@ -339,8 +349,8 @@ function bindStaticControls() {
     tab.addEventListener?.('click', () => selectCategory(tab.getAttribute('data-category')));
   }
   $('settings-import-skin')?.addEventListener('click', () => window.settingsAPI?.importSkin?.());
-  $('settings-import-pack')?.addEventListener('click', event => { event.stopPropagation(); chooseFolder(); });
-  $('settings-import-zip')?.addEventListener('click', event => { event.stopPropagation(); chooseZip(); });
+  $('settings-import-pack')?.addEventListener('click', event => { event.stopPropagation(); choosePack('directory'); });
+  $('settings-import-zip')?.addEventListener('click', event => { event.stopPropagation(); choosePack('file'); });
   $('settings-delete-skin')?.addEventListener('click', () => window.settingsAPI?.deleteCurrentSkin?.());
   $('settings-reset-placement')?.addEventListener('click', () => window.settingsAPI?.resetPlacement?.());
   $('settings-copy-diagnostics')?.addEventListener('click', async () => {
@@ -377,16 +387,8 @@ function bindStaticControls() {
     }
     setDropState('busy');
     const registered = await window.settingsAPI?.registerDrop?.(file);
-    if (registered?.image) {
-      setDropState('idle');
-      live(registered.canceled ? '已取消图片导入' : '图片已导入');
-      return;
-    }
-    if (registered?.token) await previewToken(registered.token);
-    else {
-      setDropState('error', registered?.error || '无法读取拖入的文件。');
-      liveAssert(registered?.error || '无法读取拖入的文件。');
-    }
+    if (registered?.ok && registered.token) await previewToken(registered.token);
+    else rejectPack(registered || { code: 'PATH_REJECTED', error: '只能导入 .zip 或皮肤包文件夹。' });
   });
   for (const groupId of ['settings-skins', 'settings-size', 'settings-bubble-seconds', 'settings-color-scheme']) {
     $(groupId)?.addEventListener('keydown', event => {
@@ -404,11 +406,11 @@ function bindStaticControls() {
   drop?.addEventListener('keydown', event => {
     if (event.key !== 'Enter' && event.key !== ' ') return;
     event.preventDefault();
-    chooseZip();
+    choosePack('file');
   });
   $('settings-zip-confirm')?.addEventListener('click', () => { submitZip(); });
   $('settings-zip-cancel')?.addEventListener('click', async () => {
-    if (pendingToken) await window.settingsAPI?.cancelPreview?.(pendingToken);
+    if (pendingToken) await window.settingsAPI?.cancelSkinPack?.(pendingToken);
     clearPreview();
     setDropState('idle');
     live('已取消未导入的皮肤包');
@@ -467,7 +469,7 @@ function bindStaticControls() {
     if (event.key !== 'Escape') return;
     event.preventDefault();
     if (pendingToken) {
-      await window.settingsAPI?.cancelPreview?.(pendingToken);
+      await window.settingsAPI?.cancelSkinPack?.(pendingToken);
       clearPreview();
       setDropState('idle');
       live('已取消未导入的皮肤包');
@@ -485,7 +487,7 @@ async function beginClose() {
     window.__dialogueDirty = false;
   }
   if (pendingToken) {
-    await window.settingsAPI?.cancelPreview?.(pendingToken);
+    await window.settingsAPI?.cancelSkinPack?.(pendingToken);
     clearPreview();
     setDropState('idle');
   }
@@ -518,7 +520,6 @@ function boot() {
   const currentTab = document.querySelector?.('#settings-nav [aria-selected="true"]') || $('tab-appearance');
   currentTab?.focus?.({ preventScroll: true });
   window.settingsAPI?.onShowGroup?.(selectCategory);
-  window.settingsAPI?.onPreviewToken?.(token => previewToken(token));
   window.settingsAPI?.about?.().then(info => {
     if (!info) return;
     if ($('settings-electron')) $('settings-electron').textContent = info.electron ? `Electron ${info.electron}` : 'Electron（当前不是 Electron 进程）';

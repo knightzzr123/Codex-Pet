@@ -28,7 +28,7 @@ const { createSessionStateTracker, sessionPresentation } = require('./session-st
 const { VIEWPORT, inputRegions } = require('./layout.cjs');
 const { openSettingsWindow, getSettingsWindow } = require('./settings-window.cjs');
 const { noteDisplay, relocateToVisibleDisplay, planScreenEvent, nearestDisplay, SCREEN_EVENT_DELAY_MS } = require('./display-layout.cjs');
-const { createZipGrants } = require('./zip-grant.cjs');
+const { createSkinPackSession } = require('./skin-pack-session.cjs');
 const { version: APP_VERSION, DISPLAY_VERSION } = require('./version-info.cjs');
 const {
   interpolateBounds, interpolateZoom, boundsDiffer, zoomDiffer, settleDurationMs, createSettlePlayer
@@ -47,8 +47,6 @@ app.setPath('userData', smokeTest ? path.join(work, 'smoke-data') : dataDir);
 if (!app.requestSingleInstanceLock()) { app.quit(); }
 else {
   let win, interval, scopeMonitor, pluginInterval, sessionTimer, sessionTracker, functionMenu;
-  const zipGrants = createZipGrants();
-  const zipPrepared = new Map();
   let screenTimer = null;
   let refreshScalePending = false;
   let displayMemory = { displayId: null, scaleFactor: null, crossed: false, scaleChanged: false };
@@ -81,6 +79,14 @@ else {
   }
   const skins = new SkinLibrary(app.getPath('userData'));
   const skinPacks = new SkinPackLibrary(app.getPath('userData'));
+  const skinPackSession = createSkinPackSession({
+    library: skinPacks,
+    validateImage: (...args) => validateSkinImage(...args),
+    onImported(pack) {
+      const first = pack?.characters?.[0];
+      if (first) setSkin(packCharacterId(pack.id, first.id));
+    }
+  });
   const dialogueLibrary = new DialogueLibrary(app.getPath('userData'));
   const defaultSkin = { id: 'default', name: '默认 · 鲸鱼娘', url: pathToFileURL(path.join(project, 'assets', 'pet.png')).href };
   const builtInSkins = [defaultSkin, {
@@ -365,24 +371,11 @@ else {
     setSkin(skin.id);
     return skin;
   }
-  async function chooseSkinPack(event) {
-    if (importingSkin || deletingSkin || editingDialogues) return;
-    importingSkin = true;
-    cancelDrag();
-    const parent = dialogOwner(event) || getSettingsWindow() || win;
-    try {
-      const result = await dialog.showOpenDialog(parent, {
-        title: '导入皮肤包文件夹', buttonLabel: '预览', properties: ['openDirectory'],
-        message: '选择包含 manifest.json、角色图片和缩略图的文件夹'
-      });
-      if (result.canceled || !result.filePaths[0]) return;
-      const token = rememberZip(result.filePaths[0], 'directory');
-      const settingsWindow = getSettingsWindow();
-      if (settingsWindow) settingsWindow.webContents.send('settings:preview-token', token);
-    } catch (error) {
-      await dialog.showMessageBox(parent, { type: 'error', title: '无法预览皮肤包',
-        message: '皮肤包预览失败', detail: zipFailure(error) });
-    } finally { importingSkin = false; }
+  function bindSkinPackWindow(settingsWindow) {
+    if (!settingsWindow || settingsWindow.__skinPackBound || settingsWindow.isDestroyed?.()) return;
+    settingsWindow.__skinPackBound = true;
+    const senderId = settingsWindow.webContents.id;
+    settingsWindow.webContents.once('destroyed', () => skinPackSession.releaseSender(senderId));
   }
   async function deleteImportedPack(id) {
     if (importingSkin || deletingSkin || editingDialogues) return false;
@@ -540,14 +533,10 @@ else {
       throw error;
     }
   }
-  function rememberZip(filePath, kind = 'zip') {
-    const stat = fs.lstatSync(filePath);
-    if (stat.isSymbolicLink() || (kind === 'zip' && !stat.isFile()) || (kind === 'directory' && !stat.isDirectory())) {
-      const error = new Error(kind === 'directory' ? '请选择皮肤包文件夹。' : '只能导入普通 ZIP 文件。');
-      error.code = 'ZIP_FORMAT';
-      throw error;
-    }
-    return zipGrants.grant(filePath, { kind });
+  function skinPackSender(event) {
+    try { assertSettingsSender(event); }
+    catch (error) { return { ok: false, code: error.code || 'ZIP_SENDER', error: error.message }; }
+    return { ok: true, id: event.sender.id };
   }
   function isImageSelection(filePath) {
     return typeof filePath === 'string' && /\.(png|jpe?g|gif|webp|bmp)$/i.test(filePath);
@@ -561,43 +550,24 @@ else {
     setSkin(skin.id);
     return { image: true, canceled: false };
   }
-  async function chooseZipFile(event) {
-    assertSettingsSender(event);
-    const result = await dialog.showOpenDialog(dialogOwner(event), {
+  async function chooseSkinPackSource(event, mode) {
+    const sender = skinPackSender(event);
+    if (!sender.ok) return sender;
+    const directory = mode === 'directory';
+    const result = await dialog.showOpenDialog(dialogOwner(event), directory ? {
+      title: '导入皮肤包文件夹', buttonLabel: '预览', properties: ['openDirectory'],
+      message: '选择包含 manifest.json、角色图片和缩略图的文件夹'
+    } : {
       title: '导入皮肤包或图片', buttonLabel: '继续', properties: ['openFile'],
       filters: [{ name: 'ZIP 或图片', extensions: ['zip', 'png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'] }]
     });
-    if (result.canceled || !result.filePaths[0]) return { canceled: true };
+    if (result.canceled || !result.filePaths[0]) return { ok: true, canceled: true };
     const filePath = result.filePaths[0];
-    if (isImageSelection(filePath)) return importImageFromPath(filePath, dialogOwner(event));
-    return { canceled: false, token: rememberZip(filePath) };
-  }
-  function cancelPreviewToken(token) {
-    zipPrepared.delete(token);
-    zipGrants.forget(token);
-    return { ok: true };
-  }
-  async function importGrantedZip(token, confirmSame) {
-    const prepared = zipPrepared.get(token);
-    if (!prepared) {
-      const error = new Error('请先预览这个皮肤包，再确认导入。');
-      error.code = 'ZIP_UNREGISTERED';
-      throw error;
+    if (!directory && isImageSelection(filePath)) {
+      const imported = await importImageFromPath(filePath, dialogOwner(event));
+      return { ok: true, image: true, canceled: imported.canceled === true };
     }
-    if (prepared.needsConfirm && confirmSame !== true) {
-      const error = new Error('已存在相同内容的皮肤包。取消则不会做任何更改；确认后使用已有文件，不会复制第二份。');
-      error.code = 'PACK_CONFIRM';
-      throw error;
-    }
-    const pack = prepared.kind === 'directory'
-      ? await skinPacks.importDirectory(prepared.filePath, validateSkinImage)
-      : await skinPacks.importPrepared(prepared.files, validateSkinImage, { confirmSame: true });
-    zipPrepared.delete(token);
-    zipGrants.forget(token);
-    if (!pack?.characters?.length) throw new Error('皮肤包没有可用角色。');
-    const first = pack.characters[0];
-    setSkin(packCharacterId(pack.id, first.id));
-    return { id: pack.id, name: pack.name, characterCount: pack.characters.length };
+    return skinPackSession.register(filePath, sender.id);
   }
   function openSettingsPanel(groupId) {
     cancelDrag();
@@ -607,12 +577,11 @@ else {
       groupId: typeof groupId === 'string' ? groupId : undefined,
       backgroundColor: settingsBackground(),
       onClosed: () => {
-        zipPrepared.clear();
-        try { zipGrants.forgetAll(); } catch {}
         publish();
         if (win && !win.isDestroyed()) win.focus();
       }
     });
+    bindSkinPackWindow(settingsWindow);
     if (typeof groupId === 'string' && settingsWindow && !settingsWindow.isDestroyed?.()) {
       const send = () => {
         if (!settingsWindow.isDestroyed()) settingsWindow.webContents.send('settings:show-group', groupId);
@@ -1427,63 +1396,31 @@ else {
     ipcMain.on('settings:close', event => {
       const owner = dialogOwner(event);
       if (owner && owner !== win && !owner.isDestroyed()) {
-        zipPrepared.clear();
-        try { zipGrants.forgetAll(); } catch {}
         owner.__allowClose = true;
         owner.close();
       }
     });
-    ipcMain.handle('settings:choose-zip', event => chooseZipFile(event));
-    ipcMain.handle('settings:register-drop', async (event, filePath) => {
-      try {
-        assertSettingsSender(event);
-        if (typeof filePath !== 'string' || !path.isAbsolute(filePath)) {
-          const error = new Error('拖放没有登记到本机文件。');
-          error.code = 'ZIP_UNREGISTERED';
-          throw error;
-        }
-        if (isImageSelection(filePath)) return importImageFromPath(filePath, dialogOwner(event));
-        const stat = fs.lstatSync(filePath);
-        const token = stat.isDirectory() ? rememberZip(filePath, 'directory') : rememberZip(filePath);
-        return { token };
-      } catch (error) {
-        return { ok: false, error: zipFailure(error), code: error.code || 'ZIP_UNREGISTERED' };
-      }
+    ipcMain.handle('skin-pack:choose', (event, mode) => chooseSkinPackSource(event, mode));
+    ipcMain.handle('skin-pack:register-drop', (event, filePath) => {
+      const sender = skinPackSender(event);
+      if (!sender.ok) return sender;
+      return skinPackSession.register(filePath, sender.id);
     });
-    ipcMain.handle('settings:preview-zip', async (event, token) => {
-      try {
-        assertSettingsSender(event);
-        const grant = zipGrants.resolve(token);
-        const identified = grant.kind === 'directory'
-          ? skinPacks.identifyDirectory(grant.filePath)
-          : await skinPacks.inspectZip(grant.filePath);
-        zipPrepared.set(token, {
-          kind: grant.kind,
-          filePath: grant.filePath,
-          files: identified.files,
-          needsConfirm: identified.needsConfirm === true
-        });
-        return skinPacks.previewFromIdentified(identified);
-      } catch (error) {
-        return { ok: false, error: zipFailure(error), code: error.code || 'ZIP_REJECTED' };
-      }
+    ipcMain.handle('skin-pack:preview', (event, token) => {
+      const sender = skinPackSender(event);
+      if (!sender.ok) return sender;
+      return skinPackSession.preview(token, sender.id);
     });
-    ipcMain.handle('settings:choose-folder', async event => {
-      try {
-        assertSettingsSender(event);
-        const result = await dialog.showOpenDialog(dialogOwner(event), {
-          title: '导入皮肤包文件夹', buttonLabel: '预览', properties: ['openDirectory'],
-          message: '选择包含 manifest.json、角色图片和缩略图的文件夹'
-        });
-        if (result.canceled || !result.filePaths[0]) return { canceled: true };
-        return { canceled: false, token: rememberZip(result.filePaths[0], 'directory') };
-      } catch (error) {
-        return { ok: false, error: zipFailure(error), code: error.code || 'ZIP_REJECTED' };
-      }
+    ipcMain.handle('skin-pack:commit', (event, payload) => {
+      const sender = skinPackSender(event);
+      if (!sender.ok) return sender;
+      const body = payload && typeof payload === 'object' ? payload : {};
+      return skinPackSession.commit(body.token, sender.id, { acceptSameName: body.acceptSameName === true });
     });
-    ipcMain.handle('settings:cancel-preview', (event, token) => {
-      try { assertSettingsSender(event); return cancelPreviewToken(token); }
-      catch (error) { return { ok: false, error: zipFailure(error), code: error.code || 'ZIP_UNREGISTERED' }; }
+    ipcMain.handle('skin-pack:cancel', (event, token) => {
+      const sender = skinPackSender(event);
+      if (!sender.ok) return sender;
+      return skinPackSession.cancel(token, sender.id);
     });
     ipcMain.handle('settings:copy-diagnostics', event => {
       try {
@@ -1525,20 +1462,10 @@ else {
         else deleteImportedSkin(state.skin.id);
       } catch {}
     });
-    ipcMain.handle('settings:import-zip', async (event, payload) => {
-      try {
-        assertSettingsSender(event);
-        const token = typeof payload === 'string' ? payload : payload?.token;
-        const pack = await importGrantedZip(token, payload?.confirmSame === true);
-        return { ok: true, pack };
-      } catch (error) {
-        return { ok: false, code: error.code || 'ZIP_REJECTED', error: zipFailure(error) };
-      }
-    });
     ipcMain.on('pet:size-level', (_event, level) => setSizeLevel(Number(level)));
     ipcMain.on('pet:set-skin', (_event, id) => setSkin(id));
     ipcMain.on('pet:import-skin', () => { chooseSkinImage(); });
-    ipcMain.on('pet:import-skin-pack', event => { chooseSkinPack(event); });
+    ipcMain.on('pet:import-skin-pack', () => { openSettingsPanel('appearance'); });
     ipcMain.on('pet:delete-skin-pack', (_event, id) => { deleteImportedPack(id); });
     ipcMain.on('pet:edit-dialogues', () => { openSettingsPanel('dialogue'); });
     ipcMain.on('pet:export-preferences', () => { exportPreferences(); });
@@ -1627,6 +1554,6 @@ else {
     console.error(error); app.exit(1);
   });
   app.on('second-instance', () => { if (win) updateScope(scope); });
-  app.on('before-quit', () => { closing = true; try { cancelSettle({ apply: true }); } catch {} clearInterval(interval); clearInterval(pluginInterval); if (sessionTimer) clearTimeout(sessionTimer); scopeMonitor?.stop(); try { scopeVisibility?.flush(); } catch {}; flushPersistentState(); });
+  app.on('before-quit', () => { closing = true; try { skinPackSession.releaseAll(); } catch {} try { cancelSettle({ apply: true }); } catch {} clearInterval(interval); clearInterval(pluginInterval); if (sessionTimer) clearTimeout(sessionTimer); scopeMonitor?.stop(); try { scopeVisibility?.flush(); } catch {}; flushPersistentState(); });
   app.on('will-quit', flushPersistentState);
 }

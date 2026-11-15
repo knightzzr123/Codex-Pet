@@ -6,7 +6,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { readZipBuffer } = require('../src/zip-reader.cjs');
 const { SkinPackLibrary } = require('../src/skin-packs.cjs');
-const { assertGrantableZipPath, createZipGrants } = require('../src/zip-grant.cjs');
+const { classifySkinPackPath } = require('../src/skin-pack-session.cjs');
 
 function generate() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dafeiyu-malicious-zip-'));
@@ -47,15 +47,13 @@ test('21 个恶意或边界 ZIP 在运行时生成，不把二进制夹具写进
 });
 
 test('未登记路径和 UNC / \\\\?\\ 不能进入导入', () => {
-  const grants = createZipGrants();
-  assert.throws(() => assertGrantableZipPath('\\\\server\\share\\pack.zip'), error => error.code === 'ZIP_UNC');
-  assert.throws(() => assertGrantableZipPath('//server/share/pack.zip'), error => error.code === 'ZIP_UNC');
-  assert.throws(() => assertGrantableZipPath('\\\\?\\C:\\Temp\\pack.zip'), error => error.code === 'ZIP_UNC');
-  assert.throws(() => grants.resolve('not-a-token'), error => error.code === 'ZIP_UNREGISTERED');
-  const token = grants.grant('C:/Users/qa/pack.zip');
-  assert.equal(grants.resolve(token).filePath, 'C:/Users/qa/pack.zip');
+  assert.equal(classifySkinPackPath('\\\\server\\share\\pack.zip').code, 'PATH_REJECTED');
+  assert.equal(classifySkinPackPath('//server/share/pack.zip').code, 'PATH_REJECTED');
+  assert.equal(classifySkinPackPath('\\\\?\\C:\\Temp\\pack.zip').code, 'PATH_REJECTED');
+  assert.equal(classifySkinPackPath('\\\\.\\C:\\Temp\\pack.zip').code, 'PATH_REJECTED');
   const main = fs.readFileSync(path.join(__dirname, '..', 'src', 'main.cjs'), 'utf8');
   assert.match(main, /assertSettingsSender/);
-  assert.match(main, /zipGrants\.resolve\(token\)/);
+  assert.match(main, /skin-pack:preview/);
   assert.doesNotMatch(main, /function assertZipSelection/);
+  assert.doesNotMatch(main, /settings:preview-zip|settings:import-zip|settings:choose-zip/);
 });

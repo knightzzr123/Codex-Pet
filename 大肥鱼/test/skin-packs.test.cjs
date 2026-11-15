@@ -190,14 +190,16 @@ test('主进程接入皮肤包导入、同窗口多角色切换与单实例锁',
   assert.match(main, /pet:import-skin-pack/);
   assert.match(main, /packCharacterId\(pack\.id, character\.id\)/);
   assert.match(main, /setSkin\(packCharacterId\(pack\.id, first\.id\)\)/);
-  assert.match(main, /importGrantedZip|importPrepared/);
+  assert.match(main, /skin-pack:commit/);
+  assert.match(fs.readFileSync(path.join(root, 'src', 'skin-pack-session.cjs'), 'utf8'), /importDirectory/);
   assert.equal((main.match(/new BrowserWindow/g) || []).length, 1);
   assert.match(html, /id="settings-import-pack"/);
   assert.match(html, /id="settings-import-zip"/);
   assert.match(html, /id="settings-zip-drop"/);
   assert.match(main, /extensions: \['zip', 'png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'\]/);
   assert.match(preload, /importSkinPack/);
-  assert.match(preload, /previewZip/);
+  assert.match(preload, /previewSkinPack/);
+  assert.doesNotMatch(preload, /settings:preview-zip|settings:import-zip|settings:choose-zip/);
   assert.match(renderer, /settings-import-pack/);
   assert.match(renderer, /settings-zip-drop/);
 });
