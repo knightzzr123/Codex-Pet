@@ -78,7 +78,13 @@ else {
     } catch {}
   }
   const skins = new SkinLibrary(app.getPath('userData'));
-  const skinPacks = new SkinPackLibrary(app.getPath('userData'));
+  const skinPacks = new SkinPackLibrary(app.getPath('userData'), {
+    onDiagnostic(entry) {
+      // README/LICENSE/.txt/.md are skipped, never extracted. Record the
+      // filename and reason in the diagnostic log; the settings UI stays silent.
+      logLifecycle({ event: 'skin-pack-import-skip', file: entry.name, reason: entry.reason, code: entry.code });
+    }
+  });
   const skinPackSession = createSkinPackSession({
     library: skinPacks,
     validateImage: (...args) => validateSkinImage(...args),

@@ -17,24 +17,27 @@ function generate() {
   return { dir, catalog };
 }
 
-test('21 个恶意或边界 ZIP 在运行时生成，不把二进制夹具写进仓库', async () => {
+test('恶意或边界 ZIP 在运行时生成，不把二进制夹具写进仓库', async () => {
   const { dir, catalog } = generate();
   try {
-    assert.equal(catalog.length, 23);
+    assert.equal(catalog.length, 27);
     const libraryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dafeiyu-malicious-lib-'));
-    const library = new SkinPackLibrary(libraryRoot);
-    const acceptedRead = new Set(['CTRL', 'Z4-BAD-MANIFEST', 'B2-DEEP-JSON', 'BIT3-DESCRIPTOR']);
+    const diagnostics = [];
+    const library = new SkinPackLibrary(libraryRoot, { onDiagnostic: entry => diagnostics.push(entry) });
+    const acceptedRead = new Set(['CTRL', 'Z4-BAD-MANIFEST', 'B2-DEEP-JSON', 'BIT3-DESCRIPTOR', 'README-MD', 'TEXT-ONLY']);
     const expectedCode = {
       'B3-BAD-CRC': 'ZIP_CRC',
       'B4-NAME-MISMATCH': 'ZIP_HEADER',
       'B4-SIZE-MISMATCH': 'ZIP_HEADER',
       'B4-OVERLAP': 'ZIP_FORMAT',
       'Z3-BOMB': 'ZIP_LIMIT',
-      'B2-DEEP-FS': 'ZIP_MANIFEST_LOCATION'
+      'B2-DEEP-FS': 'ZIP_MANIFEST_LOCATION',
+      'B13-MISMATCH': 'ZIP_HEADER',
+      'README-EXE': 'ZIP_EXTENSION'
     };
     for (const item of catalog) {
       const buffer = fs.readFileSync(path.join(dir, item.file));
-      if (item.id === 'B2-DEEP-FS') {
+      if (item.id === 'B2-DEEP-FS' || item.id === 'TEXT-ONLY') {
         await assert.rejects(() => inspectZipBuffer(buffer), error => error.code === 'ZIP_MANIFEST_LOCATION');
         continue;
       }
@@ -53,6 +56,20 @@ test('21 个恶意或边界 ZIP 在运行时生成，不把二进制夹具写进
     await assert.rejects(() => library.importZip(bad, async () => {}), /版本不支持/);
     const deepJson = path.join(dir, '13-deep-json-manifest.zip');
     await assert.rejects(() => library.importZip(deepJson, async () => {}), /嵌套过深|版本不支持|无法解析/);
+    const readme = await library.importZip(path.join(dir, '31-readme-md.zip'), async () => {});
+    assert.equal(readme.name, 'QA包装');
+    assert.equal(readme.reused, true);
+    assert.deepEqual(diagnostics.map(entry => entry.name).sort(), ['LICENSE', 'README.md']);
+    assert.ok(diagnostics.every(entry => /已跳过/.test(entry.reason)));
+    const installed = library.get(imported.id);
+    assert.equal(fs.existsSync(path.join(installed.directory, 'README.md')), false);
+    assert.equal(fs.existsSync(path.join(installed.directory, 'LICENSE')), false);
+    await assert.rejects(() => library.importZip(path.join(dir, '27-descriptor-mismatch.zip'), async () => {}),
+      error => error.code === 'ZIP_HEADER');
+    await assert.rejects(() => library.importZip(path.join(dir, '32-readme-exe.zip'), async () => {}),
+      error => error.code === 'ZIP_EXTENSION');
+    await assert.rejects(() => library.importZip(path.join(dir, '33-text-only.zip'), async () => {}),
+      /缺少 manifest\.json/);
     assert.equal(library.list().length, 1);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -67,6 +84,8 @@ test('未登记路径和 UNC / \\\\?\\ 不能进入导入', () => {
   const main = fs.readFileSync(path.join(__dirname, '..', 'src', 'main.cjs'), 'utf8');
   assert.match(main, /assertSettingsSender/);
   assert.match(main, /skin-pack:preview/);
+  assert.match(main, /onDiagnostic/);
+  assert.match(main, /skin-pack-import-skip/);
   assert.doesNotMatch(main, /function assertZipSelection/);
   assert.doesNotMatch(main, /settings:preview-zip|settings:import-zip|settings:choose-zip/);
 });

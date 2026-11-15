@@ -423,3 +423,61 @@ test('CP936 文件名的 ZIP 能导入，坏 ZIP 留下的解压目录会在下�
   assert.equal(fs.existsSync(path.join(cleaned.directory, '.staging-2-leftover')), false);
   assert.equal(cleaned.list().length, 1);
 });
+
+test('说明文件跳过不区分大小写，写中文诊断回调且不进入预览/界面', async t => {
+  const skipped = [];
+  const files = await readZipBuffer(buildZip([
+    { name: 'role.png', data: Buffer.from('png') },
+    { name: 'ReadMe.MD', data: Buffer.from('# hi') },
+    { name: 'NOTES.TXT', data: Buffer.from('notes') },
+    { name: 'LICENSE', data: Buffer.from('mit') },
+    { name: '__MACOSX/._role.png', data: Buffer.from('meta') }
+  ]), { onSkip: entry => skipped.push(entry) });
+  assert.deepEqual(files.map(file => file.name), ['role.png']);
+  assert.equal(skipped.length, 4);
+  for (const entry of skipped) {
+    assert.match(entry.name, /ReadMe\.MD|NOTES\.TXT|LICENSE|\._role\.png/);
+    assert.match(entry.reason, /已跳过/);
+    assert.equal(entry.code, 'ZIP_IGNORED');
+  }
+  assert.ok(skipped.some(entry => /ReadMe\.MD/.test(entry.reason)));
+  // README.exe is not a documentation file and still hits the extension gate.
+  await assert.rejects(() => readZipBuffer(buildZip([
+    { name: 'README.exe', data: Buffer.from('MZ') }
+  ])), error => error.code === 'ZIP_EXTENSION');
+  // A LICENSE directory does not make its PNG contents ignorable.
+  const nested = await readZipBuffer(buildZip([
+    { name: 'LICENSE/xx.png', data: Buffer.from('png') }
+  ]));
+  assert.deepEqual(nested.map(file => file.name), ['LICENSE/xx.png']);
+
+  const root = temporary(t);
+  const zip = path.join(root, 'readme.zip');
+  const manifest = Buffer.from(JSON.stringify({
+    manifestVersion: 1, name: '说明文件包', characters: [{ id: 'whale', name: '鲸鱼', image: 'role.png' }]
+  }));
+  fs.writeFileSync(zip, buildZip([
+    { name: 'manifest.json', data: manifest },
+    { name: 'role.png', data: png(80, 80, 5) },
+    { name: 'README.md', data: Buffer.from('# readme') },
+    { name: 'LICENSE', data: Buffer.from('mit') }
+  ]));
+  const diagnostics = [];
+  const library = new SkinPackLibrary(root, { onDiagnostic: entry => diagnostics.push(entry) });
+  const preview = await library.previewZip(zip);
+  assert.equal(preview.name, '说明文件包');
+  assert.equal(diagnostics.length, 2);
+  assert.equal(JSON.stringify(preview).includes('已跳过'), false);
+  assert.equal(JSON.stringify(preview).includes('README.md'), false);
+});
+
+test('只含说明文件的 ZIP 在预览时给中文缺少 manifest 报错', async () => {
+  const { inspectZipBuffer } = require('../src/zip-reader.cjs');
+  const buffer = buildZip([
+    { name: 'README.md', data: Buffer.from('# readme') },
+    { name: 'notes.txt', data: Buffer.from('notes') }
+  ]);
+  assert.deepEqual(await readZipBuffer(buffer), []);
+  await assert.rejects(() => inspectZipBuffer(buffer), error =>
+    error.code === 'ZIP_MANIFEST_LOCATION' && /缺少 manifest\.json/.test(error.message));
+});

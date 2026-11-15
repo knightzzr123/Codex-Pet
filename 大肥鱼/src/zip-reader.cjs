@@ -140,17 +140,22 @@ function isDirectoryEntry(externalAttributes, directoryName) {
 const IGNORED_EXTENSIONS = new Set(['txt', 'md']);
 const IGNORED_BARE_NAMES = new Set(['license', 'licence', 'readme']);
 
-function isIgnoredEntry(entry) {
+function ignoredReason(entry) {
   const parts = entry.parts || [];
-  if (parts[0] === '__MACOSX') return true;
   const base = String(parts[parts.length - 1] || '');
+  if (parts[0] === '__MACOSX') return `macOS 资源目录 ${base}，已跳过`;
   const lower = base.toLowerCase();
-  if (lower === '.ds_store' || lower === 'thumbs.db') return true;
+  if (lower === '.ds_store') return `系统缓存文件 ${base}，已跳过`;
+  if (lower === 'thumbs.db') return `系统缓存文件 ${base}，已跳过`;
   const dot = lower.lastIndexOf('.');
   const ext = dot > 0 ? lower.slice(dot + 1) : '';
-  if (IGNORED_EXTENSIONS.has(ext)) return true;
-  if (!ext && IGNORED_BARE_NAMES.has(lower)) return true;
-  return false;
+  if (IGNORED_EXTENSIONS.has(ext)) return `说明文件 ${base}（扩展名 .${ext}），已跳过`;
+  if (!ext && IGNORED_BARE_NAMES.has(lower)) return `许可证/说明文件 ${base}（无扩展名），已跳过`;
+  return '';
+}
+
+function isIgnoredEntry(entry) {
+  return Boolean(ignoredReason(entry));
 }
 
 function assertAllowedExtension(safe) {
@@ -163,7 +168,7 @@ function assertAllowedExtension(safe) {
   }
 }
 
-function parseCentralDirectory(buffer, limits) {
+function parseCentralDirectory(buffer, limits, onSkip) {
   const eocd = findEocd(buffer);
   const { entries, cdSize, cdOffset } = assertNotZip64(buffer, eocd);
   if (entries > limits.maxEntries) throw new ZipError(`压缩包条目超过 ${limits.maxEntries} 个，已拒绝。`, 'ZIP_LIMIT');
@@ -197,8 +202,12 @@ function parseCentralDirectory(buffer, limits) {
     }
     const decoded = unicodePathName(extra, nameBytes) || decodeEntryName(nameBytes, flags);
     const safe = safeEntryName(decoded);
-    if (isIgnoredEntry({ parts: safe.parts })) {
+    const reason = ignoredReason({ parts: safe.parts });
+    if (reason) {
       skipped += 1;
+      if (typeof onSkip === 'function') {
+        try { onSkip({ name: safe.name, reason, code: 'ZIP_IGNORED' }); } catch { /* diagnostics must not block imports */ }
+      }
       cursor = nameStart + nameLength + extraLength + commentLength;
       continue;
     }
@@ -383,7 +392,7 @@ function openZip(buffer, options = {}) {
   }
   const limits = limitsFrom(options);
   if (buffer.length > limits.maxArchiveBytes) throw new ZipError('压缩包超过大小上限。', 'ZIP_LIMIT');
-  const entries = parseCentralDirectory(buffer, limits);
+  const entries = parseCentralDirectory(buffer, limits, options.onSkip);
   const cdOffset = assertNoOverlap(buffer, entries);
   attachDescriptorBoundaries(buffer, entries, cdOffset);
   return {
@@ -500,5 +509,6 @@ module.exports = {
   writeEntries,
   decodeEntryName,
   safeEntryName,
-  isIgnoredEntry
+  isIgnoredEntry,
+  ignoredReason
 };

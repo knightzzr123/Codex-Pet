@@ -1,7 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { randomBytes, randomUUID } = require('node:crypto');
-const { ZIP_LIMITS, inspectZipFile, writeEntries } = require('./zip-reader.cjs');
+const { ZIP_LIMITS, writeEntries } = require('./zip-reader.cjs');
 const { findManifestDirectory, firstCharacterLink } = require('./skin-packs.cjs');
 
 const TOKEN_TTL_MS = 10 * 60 * 1000;
@@ -156,7 +156,7 @@ function createSkinPackSession(options = {}) {
     if (record.preview) return { ok: true, ...record.preview };
     try {
       if (record.kind === 'zip') {
-        const inspected = await inspectZipFile(record.filePath);
+        const inspected = await library.inspectZipFile(record.filePath);
         const selected = library.filesForManifest(inspected.files);
         const root = path.join(library.directory, `.unzip-${process.pid}-${randomUUID()}`);
         fs.mkdirSync(library.directory, { recursive: true });

@@ -592,8 +592,24 @@ class SkinPackLibrary {
     return { manifest, files: kept };
   }
 
+  // Ignored README/LICENSE entries are logged through the same diagnostic sink
+  // used by the main process. The UI itself stays silent.
+  reportDiagnostic(entry) {
+    try { this.onDiagnostic?.(entry); } catch { /* diagnostics must not block imports */ }
+  }
+
+  inspectZipFile(zipPath, options = {}) {
+    return inspectZipFile(zipPath, {
+      ...options,
+      onSkip: entry => {
+        this.reportDiagnostic(entry);
+        try { options.onSkip?.(entry); } catch { /* a consumer callback must not block imports */ }
+      }
+    });
+  }
+
   async inspectZip(zipPath) {
-    const inspected = await inspectZipFile(zipPath);
+    const inspected = await this.inspectZipFile(zipPath);
     const selected = this.filesForManifest(inspected.files);
     const temp = path.join(this.directory, `.staging-zip-${process.pid}-${randomUUID()}`);
     fs.mkdirSync(this.directory, { recursive: true });
@@ -628,7 +644,7 @@ class SkinPackLibrary {
   }
 
   async importZip(zipPath, validateImage = async () => {}) {
-    const inspected = await inspectZipFile(zipPath);
+    const inspected = await this.inspectZipFile(zipPath);
     return this.importPrepared(inspected.files, validateImage);
   }
 }

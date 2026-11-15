@@ -72,6 +72,18 @@ function buildZip(entries) {
     const localOffset = offset;
     locals.push(local, stored);
     offset += local.length + stored.length;
+    if (entry.descriptor) {
+      const options = entry.descriptor === true ? {} : entry.descriptor;
+      const signed = options.signature !== false;
+      const descriptor = Buffer.alloc(signed ? 16 : 12);
+      let cursor = 0;
+      if (signed) { descriptor.writeUInt32LE(0x08074b50, 0); cursor = 4; }
+      descriptor.writeUInt32LE(options.crc ?? centralCrc, cursor);
+      descriptor.writeUInt32LE(options.compressedSize ?? centralComp, cursor + 4);
+      descriptor.writeUInt32LE(options.uncompressedSize ?? centralUncomp, cursor + 8);
+      locals.push(descriptor);
+      offset += descriptor.length;
+    }
 
     const central = Buffer.alloc(46 + centralName.length + centralExtra.length);
     central.writeUInt32LE(0x02014b50, 0);
@@ -244,6 +256,34 @@ writeFixture('Z4-BAD-MANIFEST', '20-bad-manifest-version.zip', buildZip([
   })) },
   { name: 'role.png', data: image }
 ]), 'manifestVersion 不是 1，应中文报错且不导入');
+
+const bit3 = 0x800 | 0x8;
+const descFlags = { flags: bit3, localCrc: 0, localCompressedSize: 0, localUncompressedSize: 0 };
+writeFixture('B13-MISMATCH', '27-descriptor-mismatch.zip', buildZip([
+  { name: 'manifest.json', data: manifest, ...descFlags, descriptor: { signature: true } },
+  {
+    name: 'role.png', data: image, ...descFlags,
+    descriptor: { signature: true, crc: 0xdeadbeef, compressedSize: image.length + 7, uncompressedSize: 1 }
+  }
+]), 'B13 负向：数据描述符的 CRC/大小与中央目录不一致');
+
+writeFixture('README-MD', '31-readme-md.zip', buildZip([
+  { name: 'manifest.json', data: manifest },
+  { name: 'role.png', data: image },
+  { name: 'README.md', data: Buffer.from('# readme') },
+  { name: 'LICENSE', data: Buffer.from('mit') }
+]), '补充4 合法：README.md / LICENSE 只跳过，不整包拒绝');
+
+writeFixture('README-EXE', '32-readme-exe.zip', buildZip([
+  { name: 'manifest.json', data: manifest },
+  { name: 'role.png', data: image },
+  { name: 'README.exe', data: Buffer.from('MZ-not-a-real-exe') }
+]), '补充4 负向：README.exe 仍走扩展名白名单并被拒绝');
+
+writeFixture('TEXT-ONLY', '33-text-only.zip', buildZip([
+  { name: 'README.md', data: Buffer.from('# readme') },
+  { name: 'notes.txt', data: Buffer.from('notes') }
+]), '补充4 负向：只含说明文件时按缺少 manifest 报中文错误');
 
 fs.writeFileSync(path.join(outDir, 'catalog.json'), JSON.stringify(catalog, null, 2) + '\n');
 console.log(`\nWrote ${catalog.length} fixtures to ${outDir}`);
