@@ -150,10 +150,8 @@ for relative in ('src/launch-desktop-pet.ps1', 'src/codex-scope.ps1', 'install-a
 checksum = digest(output)
 metadata_directory.mkdir(parents=True, exist_ok=True)
 checksum_line = f'{checksum}  {output.name}\n'
+(output.parent / (output.name + '.sha256')).write_text(checksum_line, encoding='utf-8', newline='\n')
 (metadata_directory / (output.name + '.sha256')).write_text(checksum_line, encoding='utf-8', newline='\n')
-sums_path = output.parent / 'SHA256SUMS'
-sums_path.write_text(f'{checksum}  {output.name}\n', encoding='utf-8', newline='\n')
-(metadata_directory / 'SHA256SUMS').write_text(checksum_line, encoding='utf-8', newline='\n')
 report = {
     'packageType': 'complete', 'version': args.version, 'archive': str(output), 'bytes': output.stat().st_size,
     'sha256': checksum, 'files': len(hashes), 'zipCrcVerified': True,

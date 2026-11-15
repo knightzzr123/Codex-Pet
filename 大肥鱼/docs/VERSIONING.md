@@ -24,3 +24,5 @@
 改完运行 `npm test`。`test/version.test.cjs` 会核对以上位置一致。
 
 发版资产名沿用 `dafeiyu-codex-pet-<内部版本>-windows-x64.zip` 与 `dafeiyu-codex-pet-<内部版本>-source.zip`，并附带 `SHA256SUMS`。
+
+`tools/package.py` 和 `tools/package-source.py` 只各写自己的 `<产物名>.sha256`（LF），不覆盖汇总文件。发版前由 `tools/write-sha256sums.py --version <内部版本> --complete <完整包> --source <源码包>` 一次生成含两个资产的 `SHA256SUMS`（LF），文件名使用上面的正式资产名。

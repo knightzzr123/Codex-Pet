@@ -54,7 +54,7 @@ npm run release-check
 node tools/release-check.cjs --package "/path/to/解压后的完整包"
 ```
 
-自检覆盖安装、卸载、升级保留设置、台词、单图皮肤、皮肤包和偏好，并校验 `PACKAGE-TYPE.json`、版本和 `FILES.sha256`。完整包旁边会写出 `SHA256SUMS`。版本号规则见 [docs/VERSIONING.md](docs/VERSIONING.md)。
+自检覆盖安装、卸载、升级保留设置、台词、单图皮肤、皮肤包和偏好，并校验 `PACKAGE-TYPE.json`、版本和 `FILES.sha256`。完整包和源码包各自写出 LF 的 `<产物名>.sha256`；发版前再用汇总脚本生成含两个资产的 `SHA256SUMS`。版本号规则见 [docs/VERSIONING.md](docs/VERSIONING.md)。
 
 源码仓库不包含 Electron 二进制。从完整安装包复制 `runtime.7z` 到项目根目录，然后执行：
 
@@ -78,7 +78,17 @@ Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
 python tools/package.py --original "完整安装包.zip" --output "..\大肥鱼-完整安装包.zip" --version 3.4.0
 ```
 
-`--version` 默认值现已与源码对齐为 `3.4.0`，仍建议显式传入以免误用。`tools/package-source.py` 生成带 `PACKAGE-TYPE.json` 的源码包，不能当作完整安装包直接安装。完整安装包必须包含通过 `runtime-manifest.json` 校验的 `runtime.7z`。展示标签为 `Codex-Pet-V1.4`。
+`--version` 默认值现已与源码对齐为 `3.4.0`，仍建议显式传入以免误用。`tools/package-source.py` 生成带 `PACKAGE-TYPE.json` 的源码包，不能当作完整安装包直接安装。两个打包脚本都会在产物旁写出 `<产物名>.sha256`（LF），且不会覆盖 `SHA256SUMS`。上传 Release 前，用最终资产名汇总成一份清单：
+
+```powershell
+python tools/package-source.py --output "..\大肥鱼-GitHub源码.zip"
+python tools/write-sha256sums.py --version 3.4.0 `
+  --complete "..\大肥鱼-完整安装包.zip" `
+  --source "..\大肥鱼-GitHub源码.zip" `
+  --output "..\SHA256SUMS"
+```
+
+完整安装包必须包含通过 `runtime-manifest.json` 校验的 `runtime.7z`。展示标签为 `Codex-Pet-V1.4`。
 
 仓库保留源码、资源、测试和第三方许可证。运行时、安装包、用户数据和诊断文件由 `.gitignore` 排除；完整安装包作为 GitHub Releases 附件发布。
 

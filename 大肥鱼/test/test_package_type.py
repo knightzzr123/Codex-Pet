@@ -11,6 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE_SCRIPT = ROOT / 'tools' / 'package-source.py'
 PACKAGE_SCRIPT = ROOT / 'tools' / 'package.py'
+SUMS_SCRIPT = ROOT / 'tools' / 'write-sha256sums.py'
 
 
 class PackageTypeTests(unittest.TestCase):
@@ -67,6 +68,12 @@ class PackageTypeTests(unittest.TestCase):
             self.assertEqual(marker['packageType'], 'source')
             self.assertFalse(marker['installable'])
             self.assertFalse(any(name.endswith('/runtime.7z') or '/runtime/' in name for name in names))
+        sidecar = self.base / 'source.zip.sha256'
+        self.assertTrue(sidecar.is_file())
+        raw = sidecar.read_bytes()
+        self.assertNotIn(b'\r', raw)
+        self.assertEqual(raw, (hashlib.sha256(output.read_bytes()).hexdigest() + '  source.zip\n').encode('utf-8'))
+        self.assertFalse((self.base / 'SHA256SUMS').exists())
 
     def test_complete_package_has_verified_runtime_and_report(self):
         output = self.base / 'complete.zip'
@@ -78,6 +85,14 @@ class PackageTypeTests(unittest.TestCase):
             self.assertEqual(archive.read('大肥鱼/runtime.7z'), self.runtime.read_bytes())
         report = json.loads((self.base / 'metadata/complete.validation.json').read_text(encoding='utf-8'))
         self.assertEqual(report['packageType'], 'complete')
+        sidecar = self.base / 'complete.zip.sha256'
+        self.assertTrue(sidecar.is_file())
+        self.assertEqual(sidecar.read_bytes(),
+                         (report['sha256'] + '  complete.zip\n').encode('utf-8'))
+        self.assertNotIn(b'\r', sidecar.read_bytes())
+        self.assertTrue((self.base / 'metadata/complete.zip.sha256').is_file())
+        self.assertFalse((self.base / 'SHA256SUMS').exists())
+        self.assertFalse((self.base / 'metadata/SHA256SUMS').exists())
 
     def test_runtime_size_or_hash_mismatch_fails(self):
         self.manifest['sha256'] = '0' * 64
@@ -120,11 +135,13 @@ class PackageTypeTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('source package', result.stderr)
 
-    def test_package_py_default_version_is_3_3_1(self):
+    def test_package_py_default_version_is_3_4_0_and_does_not_clobber_sums(self):
         output = self.base / 'default-version.zip'
         command = [sys.executable, str(PACKAGE_SCRIPT), '--root', str(self.project), '--output', str(output), '--verify-directory', str(self.base / 'verify-default-version'), '--metadata-directory', str(self.base / 'metadata'), '--runtime-archive', str(self.runtime)]
         stale = self.base / 'SHA256SUMS'
-        stale.write_bytes(b'deadbeef  stale-release.zip\r\n')
+        stale_lines = (f'{"a" * 64}  dafeiyu-codex-pet-3.4.0-windows-x64.zip\r\n'
+                       f'{"b" * 64}  dafeiyu-codex-pet-3.4.0-source.zip\r\n')
+        stale.write_bytes(stale_lines.encode('utf-8'))
         result = subprocess.run(command, text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         report = json.loads((self.base / 'metadata/default-version.validation.json').read_text(encoding='utf-8'))
@@ -134,13 +151,49 @@ class PackageTypeTests(unittest.TestCase):
             marker = json.loads(archive.read('大肥鱼/PACKAGE-TYPE.json'))
         self.assertEqual(metadata['version'], '3.4.0')
         self.assertEqual(marker['version'], '3.4.0')
-        raw = stale.read_bytes()
+        self.assertEqual(stale.read_bytes(), stale_lines.encode('utf-8'),
+                         'package.py must not overwrite the aggregated SHA256SUMS')
+        raw = (self.base / 'default-version.zip.sha256').read_bytes()
         self.assertNotIn(b'\r', raw)
         self.assertTrue(raw.endswith(b'\n'))
         self.assertEqual(raw.count(b'\n'), 1)
-        self.assertIn(output.name.encode('utf-8'), raw)
-        self.assertNotIn(b'stale-release.zip', raw)
-        self.assertEqual((self.base / 'metadata' / 'SHA256SUMS').read_bytes().splitlines()[0].split()[0].decode('ascii'), report['sha256'])
+        self.assertEqual(raw, (report['sha256'] + '  default-version.zip\n').encode('utf-8'))
+        self.assertTrue((self.base / 'metadata' / 'default-version.zip.sha256').is_file())
+        self.assertFalse((self.base / 'metadata' / 'SHA256SUMS').exists())
+
+    def test_write_sha256sums_aggregates_both_assets_with_final_names(self):
+        complete = self.base / 'complete.zip'
+        source = self.base / 'source.zip'
+        packed = self.run_package(complete, runtime=self.runtime)
+        self.assertEqual(packed.returncode, 0, packed.stderr + packed.stdout)
+        sourced = self.run_source(source)
+        self.assertEqual(sourced.returncode, 0, sourced.stderr)
+        output = self.base / 'release' / 'SHA256SUMS'
+        command = [sys.executable, str(SUMS_SCRIPT), '--complete', str(complete), '--source', str(source),
+                   '--version', '3.4.0', '--output', str(output)]
+        result = subprocess.run(command, text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        raw = output.read_bytes()
+        self.assertNotIn(b'\r', raw)
+        lines = raw.decode('utf-8').splitlines()
+        self.assertEqual(len(lines), 2)
+        expected = {
+            'dafeiyu-codex-pet-3.4.0-windows-x64.zip': hashlib.sha256(complete.read_bytes()).hexdigest(),
+            'dafeiyu-codex-pet-3.4.0-source.zip': hashlib.sha256(source.read_bytes()).hexdigest(),
+        }
+        for line in lines:
+            checksum, name = line.split('  ', 1)
+            self.assertEqual(expected[name], checksum)
+        # Re-running replaces the file atomically instead of appending.
+        again = subprocess.run(command, text=True, capture_output=True)
+        self.assertEqual(again.returncode, 0, again.stderr)
+        self.assertEqual(output.read_bytes(), raw)
+        # A stale or tampered sidecar must be rejected.
+        (source.parent / (source.name + '.sha256')).write_text(
+            f'{"0" * 64}  {source.name}\n', encoding='utf-8', newline='\n')
+        mismatch = subprocess.run(command, text=True, capture_output=True)
+        self.assertNotEqual(mismatch.returncode, 0)
+        self.assertIn('does not match', mismatch.stderr)
 
 
 

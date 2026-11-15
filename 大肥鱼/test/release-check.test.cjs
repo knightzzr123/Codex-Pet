@@ -42,10 +42,20 @@ test('SHA256SUMS 同时接受 LF 与 CRLF 换行，并继续校验内容', () =>
   } finally { fs.rmSync(base, { recursive: true, force: true }); }
 });
 
-test('package.py 用 LF 写 SHA256SUMS（Windows 上也不写 CRLF）', () => {
-  const script = fs.readFileSync(path.join(__dirname, '..', 'tools', 'package.py'), 'utf8');
-  assert.match(script, /sums_path\.write_text\([\s\S]*?newline='\\n'\)/);
-  assert.match(script, /metadata_directory \/ 'SHA256SUMS'\)\.write_text\([\s\S]*?newline='\\n'\)/);
+test('打包脚本各自写 LF 的 .sha256，由汇总脚本生成唯一 SHA256SUMS', () => {
+  const tools = path.join(__dirname, '..', 'tools');
+  const packagePy = fs.readFileSync(path.join(tools, 'package.py'), 'utf8');
+  assert.match(packagePy, /output\.name \+ '\.sha256'/);
+  assert.match(packagePy, /newline='\\n'/);
+  assert.doesNotMatch(packagePy, /['"]SHA256SUMS['"]/);
+  const sourcePy = fs.readFileSync(path.join(tools, 'package-source.py'), 'utf8');
+  assert.match(sourcePy, /output\.name \+ '\.sha256'/);
+  assert.doesNotMatch(sourcePy, /'SHA256SUMS'/);
+  const aggregator = fs.readFileSync(path.join(tools, 'write-sha256sums.py'), 'utf8');
+  assert.match(aggregator, /dafeiyu-codex-pet-/);
+  assert.match(aggregator, /windows-x64/);
+  assert.match(aggregator, /source\.zip/);
+  assert.match(aggregator, /write_bytes\('\.join|encod/);
 });
 
 test('Release 自检覆盖安装、卸载、升级保留数据三条路径', () => {
