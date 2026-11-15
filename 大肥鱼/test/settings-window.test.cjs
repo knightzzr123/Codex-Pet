@@ -293,3 +293,13 @@ test('导入 UI 已移除 PACK_CONFIRM 覆盖确认流程', () => {
   assert.match(html, /id="settings-notice"/);
   assert.match(html, /id="settings-notice-action"/);
 });
+
+test('设置窗口不挂在宠物窗口下，并保留自己的任务栏按钮', () => {
+  const settingsWindow = fs.readFileSync(path.join(root, 'src', 'settings-window.cjs'), 'utf8');
+  assert.doesNotMatch(settingsWindow, /^\s*parent\s*:/m);
+  assert.match(settingsWindow, /skipTaskbar:\s*false/);
+  assert.match(settingsWindow, /modal:\s*false/);
+  const main = fs.readFileSync(path.join(root, 'src', 'main.cjs'), 'utf8');
+  assert.match(main, /openSettingsWindow\(\{[\s\S]*?anchor: win/);
+  assert.doesNotMatch(main, /parent:\s*win/);
+});

@@ -47,6 +47,8 @@ function openSettingsWindow(options = {}) {
       minWidth: bounds.minWidth, minHeight: bounds.minHeight,
       title: '设置 · 大肥鱼',
       modal: false,
+      // Own taskbar entry: no parent window and never hidden from the taskbar.
+      skipTaskbar: false,
       fullscreenable: false,
       show: false,
       autoHideMenuBar: true,
