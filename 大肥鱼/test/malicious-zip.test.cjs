@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { readZipBuffer } = require('../src/zip-reader.cjs');
+const { readZipBuffer, inspectZipBuffer } = require('../src/zip-reader.cjs');
 const { SkinPackLibrary } = require('../src/skin-packs.cjs');
 const { classifySkinPackPath } = require('../src/skin-pack-session.cjs');
 
@@ -20,18 +20,24 @@ function generate() {
 test('21 个恶意或边界 ZIP 在运行时生成，不把二进制夹具写进仓库', async () => {
   const { dir, catalog } = generate();
   try {
-    assert.equal(catalog.length, 21);
+    assert.equal(catalog.length, 23);
     const libraryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dafeiyu-malicious-lib-'));
     const library = new SkinPackLibrary(libraryRoot);
-    const acceptedRead = new Set(['CTRL', 'Z4-BAD-MANIFEST', 'B2-DEEP-JSON']);
+    const acceptedRead = new Set(['CTRL', 'Z4-BAD-MANIFEST', 'B2-DEEP-JSON', 'BIT3-DESCRIPTOR']);
     const expectedCode = {
       'B3-BAD-CRC': 'ZIP_CRC',
-      'B4-NAME-MISMATCH': 'ZIP_PATH',
-      'B4-SIZE-MISMATCH': 'ZIP_PATH',
-      'Z3-BOMB': 'ZIP_LIMIT'
+      'B4-NAME-MISMATCH': 'ZIP_HEADER',
+      'B4-SIZE-MISMATCH': 'ZIP_HEADER',
+      'B4-OVERLAP': 'ZIP_FORMAT',
+      'Z3-BOMB': 'ZIP_LIMIT',
+      'B2-DEEP-FS': 'ZIP_MANIFEST_LOCATION'
     };
     for (const item of catalog) {
       const buffer = fs.readFileSync(path.join(dir, item.file));
+      if (item.id === 'B2-DEEP-FS') {
+        await assert.rejects(() => inspectZipBuffer(buffer), error => error.code === 'ZIP_MANIFEST_LOCATION');
+        continue;
+      }
       let readError = null;
       try { await readZipBuffer(buffer); }
       catch (error) { readError = error; }

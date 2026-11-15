@@ -72,6 +72,19 @@ function nearestDisplay(bounds, displays) {
   return best;
 }
 
+const SCREEN_KIND_RANK = Object.freeze({ removed: 3, added: 2, metrics: 1 });
+
+function mergeScreenEvent(current, next) {
+  const incoming = {
+    kind: next?.kind || 'metrics',
+    changedMetrics: Array.isArray(next?.changedMetrics) ? next.changedMetrics.filter(item => typeof item === 'string') : []
+  };
+  if (!current) return incoming;
+  const kind = (SCREEN_KIND_RANK[incoming.kind] || 0) > (SCREEN_KIND_RANK[current.kind] || 0)
+    ? incoming.kind : current.kind;
+  return { kind, changedMetrics: [...new Set([...(current.changedMetrics || []), ...incoming.changedMetrics])] };
+}
+
 function metricsNeedRelayout(changedMetrics) {
   return Array.isArray(changedMetrics)
     && (changedMetrics.includes('scaleFactor') || changedMetrics.includes('workArea'));
@@ -127,6 +140,7 @@ module.exports = {
   crossedDisplay,
   noteDisplay,
   nearestDisplay,
+  mergeScreenEvent,
   metricsNeedRelayout,
   planScreenEvent,
   relocateToVisibleDisplay,

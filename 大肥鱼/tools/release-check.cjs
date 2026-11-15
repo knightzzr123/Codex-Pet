@@ -10,8 +10,7 @@ const DATA_FILES = [
   'settings.json', 'dialogues.json', 'skins/custom.png',
   'skin-packs/index.json',
   `skin-packs/${PACK_ID}/manifest.json`,
-  `skin-packs/${PACK_ID}/c-0-whale.png`,
-  'dafeiyu-preferences.json'
+  `skin-packs/${PACK_ID}/c-0-whale.png`
 ];
 
 function hashFile(file) {
@@ -103,10 +102,6 @@ function seedUserData(dataDir) {
   fs.writeFileSync(path.join(packDir, 'c-0-whale.png'), Buffer.from('pack-image-bytes'));
   fs.writeFileSync(path.join(dataDir, 'skin-packs', 'index.json'), JSON.stringify({
     version: 1, packs: [{ id: PACK_ID, name: '升级保留包', manifestVersion: 1 }]
-  }, null, 2) + '\n');
-  fs.writeFileSync(path.join(dataDir, 'dafeiyu-preferences.json'), JSON.stringify({
-    kind: 'dafeiyu.preferences', manifestVersion: 1,
-    settings: { skinId: 'rose', opacity: 0.7 }
   }, null, 2) + '\n');
 }
 

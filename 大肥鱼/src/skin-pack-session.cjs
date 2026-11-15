@@ -201,8 +201,24 @@ function createSkinPackSession(options = {}) {
       return fail('PACK_CHANGED');
     }
     if (record.needsConfirm && payload.acceptSameName !== true) return fail('PACK_CONFIRM');
+    if (record.committing) return fail('TOKEN_INVALID');
+    record.committing = true;
+    let importDir = record.dir;
     try {
-      const pack = await library.importDirectory(record.dir, validateImage);
+      if (record.kind === 'directory') {
+        const snap = path.join(library.directory, `.unzip-${process.pid}-${randomUUID()}`);
+        fs.mkdirSync(library.directory, { recursive: true });
+        fs.cpSync(record.dir, snap, { recursive: true, dereference: false });
+        record.unzipRoot = snap;
+        record.ownsDir = true;
+        importDir = findManifestDirectory(snap);
+        const snapId = library.identifyDirectory(importDir);
+        if (snapId.id !== record.id) {
+          drop(token);
+          return fail('PACK_CHANGED');
+        }
+      }
+      const pack = await library.importDirectory(importDir, validateImage);
       drop(token);
       try { onImported(pack); } catch { /* the pet window can apply the skin after the import result returns */ }
       return {
@@ -214,6 +230,8 @@ function createSkinPackSession(options = {}) {
         }
       };
     } catch (error) {
+      if (record.kind === 'directory' && record.ownsDir) drop(token);
+      else record.committing = false;
       const code = typeof error.code === 'string' ? error.code : 'ZIP_FORMAT';
       return fail(code, error.message);
     }

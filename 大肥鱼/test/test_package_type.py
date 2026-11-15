@@ -123,6 +123,8 @@ class PackageTypeTests(unittest.TestCase):
     def test_package_py_default_version_is_3_3_1(self):
         output = self.base / 'default-version.zip'
         command = [sys.executable, str(PACKAGE_SCRIPT), '--root', str(self.project), '--output', str(output), '--verify-directory', str(self.base / 'verify-default-version'), '--metadata-directory', str(self.base / 'metadata'), '--runtime-archive', str(self.runtime)]
+        stale = self.base / 'SHA256SUMS'
+        stale.write_bytes(b'deadbeef  stale-release.zip\r\n')
         result = subprocess.run(command, text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         report = json.loads((self.base / 'metadata/default-version.validation.json').read_text(encoding='utf-8'))
@@ -132,9 +134,13 @@ class PackageTypeTests(unittest.TestCase):
             marker = json.loads(archive.read('大肥鱼/PACKAGE-TYPE.json'))
         self.assertEqual(metadata['version'], '3.4.0')
         self.assertEqual(marker['version'], '3.4.0')
-        sums = (self.base / 'SHA256SUMS').read_text(encoding='utf-8')
-        self.assertIn(output.name, sums)
-        self.assertEqual((self.base / 'metadata' / 'SHA256SUMS').read_text(encoding='utf-8').split()[0], report['sha256'])
+        raw = stale.read_bytes()
+        self.assertNotIn(b'\r', raw)
+        self.assertTrue(raw.endswith(b'\n'))
+        self.assertEqual(raw.count(b'\n'), 1)
+        self.assertIn(output.name.encode('utf-8'), raw)
+        self.assertNotIn(b'stale-release.zip', raw)
+        self.assertEqual((self.base / 'metadata' / 'SHA256SUMS').read_bytes().splitlines()[0].split()[0].decode('ascii'), report['sha256'])
 
 
 

@@ -182,11 +182,54 @@ test('txt、md 和无扩展名的 LICENSE/README 静默忽略，其它扩展名�
   ])), error => error.code === 'ZIP_EXTENSION');
 });
 
-test('三层路径被拒绝，并说明 manifest 只能在根目录或一层顶层目录', async () => {
+test('图片可以放在顶层目录的子目录里，manifest 超过一层仍拒绝', async () => {
+  const { inspectZipBuffer } = require('../src/zip-reader.cjs');
+  const manifest = Buffer.from(JSON.stringify({
+    manifestVersion: 1, name: '子目录图', version: '1.0.0',
+    characters: [{ id: 'whale', name: '鲸鱼', image: 'images/a.png' }]
+  }));
+  const image = Buffer.from('png-bytes');
+  const files = await readZipBuffer(buildZip([
+    { name: 'MyPack/manifest.json', data: manifest },
+    { name: 'MyPack/images/a.png', data: image },
+    { name: 'pack/img/role.png', data: image }
+  ]));
+  assert.ok(files.some(file => file.name === 'MyPack/images/a.png'));
+  assert.ok(files.some(file => file.name === 'pack/img/role.png'));
+  const nested = await inspectZipBuffer(buildZip([
+    { name: 'MyPack/manifest.json', data: manifest },
+    { name: 'MyPack/images/a.png', data: image }
+  ]));
+  assert.equal(nested.files.some(file => file.name === 'images/a.png'), true);
+  await assert.rejects(() => inspectZipBuffer(buildZip([
+    { name: 'MyPack/deep/manifest.json', data: manifest },
+    { name: 'MyPack/deep/images/a.png', data: image }
+  ])), error => error.code === 'ZIP_MANIFEST_LOCATION' && /manifest\.json/.test(error.message) && /一层/.test(error.message));
+});
+
+test('data descriptor 的本地头大小和 CRC 为 0 时以中央目录为准', async () => {
+  const image = Buffer.from('png-bytes');
+  const files = await readZipBuffer(buildZip([
+    { name: 'role.png', data: image, flags: 0x800 | 0x8, localCrc: 0, localCompressedSize: 0, localUncompressedSize: 0 }
+  ]));
+  assert.equal(files[0].bytes.toString(), 'png-bytes');
+});
+
+test('重复路径段不会把符号链接检查指到错误的前缀', t => {
+  const root = temporary(t);
+  const link = path.join(root, 'a');
+  fs.symlinkSync(root, link);
+  assert.doesNotThrow(() => writeEntries(root, [{ name: 'b/a/file.png', bytes: Buffer.from('ok') }]));
+  assert.equal(fs.readFileSync(path.join(root, 'b', 'a', 'file.png'), 'utf8'), 'ok');
+});
+
+test('NFC 与 NFD 的同名条目视为重复', async () => {
+  const composed = 'e\u0301.png'.normalize('NFC');
+  const decomposed = 'e\u0301.png'.normalize('NFD');
   await assert.rejects(() => readZipBuffer(buildZip([
-    { name: 'pack/img/role.png', data: Buffer.from('png') }
-  ])), error => error.code === 'ZIP_MANIFEST_LOCATION'
-    && /根目录/.test(error.message) && /一层/.test(error.message) && /manifest\.json/.test(error.message));
+    { name: composed, data: Buffer.from('a') },
+    { name: decomposed, data: Buffer.from('b') }
+  ])), error => error.code === 'ZIP_DUPLICATE_NAME');
 });
 
 test('PNG 条目 CRC 错误、本地头名称不一致都会拒绝', async () => {

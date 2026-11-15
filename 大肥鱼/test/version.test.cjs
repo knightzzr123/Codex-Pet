@@ -59,6 +59,17 @@ test('诊断夹具里的 3.3.2 是旧安装树样本，不是当前产品版本'
   }
 });
 
+test('设置页里的版本字面量与 3.4.0 / V1.4 一致', () => {
+  const html = fs.readFileSync(path.join(root, 'src', 'settings.html'), 'utf8');
+  const js = fs.readFileSync(path.join(root, 'src', 'settings.js'), 'utf8');
+  assert.match(html, /Codex-Pet-V1\.4/);
+  assert.match(html, /内部版本 3\.4\.0/);
+  assert.match(js, /version: '3\.4\.0'/);
+  assert.match(js, /displayVersion: 'Codex-Pet-V1\.4'/);
+  assert.doesNotMatch(html, /3\.3\.2|Codex-Pet-V1\.3/);
+  assert.doesNotMatch(js, /3\.3\.2|Codex-Pet-V1\.3/);
+});
+
 test('版本规则写明展示版升次版本号、热修复升修订号', () => {
   const doc = fs.readFileSync(path.join(root, 'docs', 'VERSIONING.md'), 'utf8');
   assert.match(doc, /V1\.4` = `3\.4\.0/);

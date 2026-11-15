@@ -34,6 +34,10 @@ function centeredBounds(screen, anchorWindow) {
   };
 }
 
+function settingsCloseBlocked(win) {
+  return !(win && (win.__allowClose || win.__loadFailed || win.__rendererGone));
+}
+
 function openSettingsWindow(options = {}) {
   const { BrowserWindow, screen } = require('electron');
   const resolved = resolveSettingsWindow(getSettingsWindow(), () => {
@@ -42,7 +46,6 @@ function openSettingsWindow(options = {}) {
       width: bounds.width, height: bounds.height, x: bounds.x, y: bounds.y,
       minWidth: bounds.minWidth, minHeight: bounds.minHeight,
       title: '设置 · 大肥鱼',
-      parent: options.anchor && options.anchor.isDestroyed?.() !== true ? options.anchor : undefined,
       modal: false,
       fullscreenable: false,
       show: false,
@@ -64,10 +67,13 @@ function openSettingsWindow(options = {}) {
         win.focus();
       }
     });
+    win.webContents.on('render-process-gone', () => { win.__rendererGone = true; win.__allowClose = true; });
     win.on('close', event => {
-      if (win.__allowClose) return;
+      if (!settingsCloseBlocked(win)) return;
       event.preventDefault();
-      if (!win.webContents.isDestroyed()) win.webContents.send('settings:request-close');
+      try {
+        if (win.webContents && !win.webContents.isDestroyed()) win.webContents.send('settings:request-close');
+      } catch { win.__allowClose = true; }
     });
     win.once('ready-to-show', () => { if (!win.isDestroyed()) win.show(); });
     win.on('closed', () => {
@@ -75,6 +81,8 @@ function openSettingsWindow(options = {}) {
       try { options.onClosed?.(); } catch { /* the pet window may already be gone */ }
     });
     win.loadFile(path.join(__dirname, 'settings.html')).catch(() => {
+      win.__loadFailed = true;
+      win.__allowClose = true;
       if (!win.isDestroyed()) win.close();
     });
     return win;
@@ -83,4 +91,4 @@ function openSettingsWindow(options = {}) {
   return resolved.window;
 }
 
-module.exports = { openSettingsWindow, getSettingsWindow, resolveSettingsWindow, centeredBounds };
+module.exports = { openSettingsWindow, getSettingsWindow, resolveSettingsWindow, centeredBounds, settingsCloseBlocked };

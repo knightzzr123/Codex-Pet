@@ -222,6 +222,16 @@ writeFixture('Z3-BOMB', '18-zip-bomb-ratio.zip', buildZip([
   { name: 'bomb.png', method: 8, data: bombRaw }
 ]), 'deflate 压缩炸弹（约 300 KiB 零字节的 PNG 条目，压缩比超过 100:1）');
 
+writeFixture('B4-OVERLAP', '21-data-overlap.zip', buildZip([
+  { name: 'role.png', data: image },
+  { name: 'other.png', data: image, localOffset: 0 }
+]), '两个 PNG 条目的数据区重叠');
+
+writeFixture('BIT3-DESCRIPTOR', '22-data-descriptor.zip', buildZip([
+  { name: 'manifest.json', data: manifest, flags: 0x800 | 0x8, localCrc: 0, localCompressedSize: 0, localUncompressedSize: 0 },
+  { name: 'role.png', data: image, flags: 0x800 | 0x8, localCrc: 0, localCompressedSize: 0, localUncompressedSize: 0 }
+]), 'data descriptor：本地头大小和 CRC 为 0，以中央目录为准');
+
 writeFixture('Z2-EXTRA-EXE', '19-nonwhitelist-exe.zip', buildZip([
   { name: 'manifest.json', data: manifest },
   { name: 'role.png', data: image },

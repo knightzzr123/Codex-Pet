@@ -202,11 +202,8 @@ function parseCentralDirectory(buffer, limits) {
       cursor = nameStart + nameLength + extraLength + commentLength;
       continue;
     }
-    if (safe.parts.length > 2) {
-      throw new ZipError('皮肤包里的文件只能放在根目录，或唯一一层顶层目录下。manifest.json 也只能在这两个位置。', 'ZIP_MANIFEST_LOCATION');
-    }
     assertAllowedExtension(safe);
-    const fold = safe.name.toLowerCase();
+    const fold = safe.name.normalize('NFC').toLowerCase();
     if (folded.has(fold)) throw new ZipError('压缩包内存在大小写重名的条目。', 'ZIP_DUPLICATE_NAME');
     folded.add(fold);
     parsed.push({
@@ -275,11 +272,23 @@ async function readEntryPayload(buffer, entry, limits) {
   const extraLength = buffer.readUInt16LE(entry.localOffset + 28);
   const localName = buffer.subarray(entry.localOffset + 30, entry.localOffset + 30 + nameLength);
   if (localName.length !== entry.nameBytes.length || !localName.equals(entry.nameBytes)) {
-    throw new ZipError('本地文件头与中央目录的文件名不一致。', 'ZIP_PATH');
+    throw new ZipError('本地文件头与中央目录的文件名不一致。', 'ZIP_HEADER');
   }
-  if (flags !== entry.flags || localMethod !== entry.method
-    || localCompressed !== entry.compressedSize || localUncompressed !== entry.uncompressedSize) {
-    throw new ZipError('本地文件头与中央目录不一致。', 'ZIP_PATH');
+  if (localMethod !== entry.method) {
+    throw new ZipError('本地文件头与中央目录的压缩方法不一致。', 'ZIP_HEADER');
+  }
+  const dataDescriptor = (flags & 0x8) !== 0 || (entry.flags & 0x8) !== 0;
+  if ((flags & ~0x8) !== (entry.flags & ~0x8)) {
+    throw new ZipError('本地文件头与中央目录的标志不一致。', 'ZIP_HEADER');
+  }
+  const sizesMatch = localCompressed === entry.compressedSize && localUncompressed === entry.uncompressedSize;
+  const descriptorSizes = localCompressed === 0 && localUncompressed === 0;
+  if (dataDescriptor) {
+    if (!descriptorSizes && !sizesMatch) {
+      throw new ZipError('本地文件头与中央目录的大小不一致。', 'ZIP_HEADER');
+    }
+  } else if (!sizesMatch) {
+    throw new ZipError('本地文件头与中央目录的大小不一致。', 'ZIP_HEADER');
   }
   if (flags & 0x1) throw new ZipError('不支持加密的压缩包条目。', 'ZIP_ENCRYPTED');
   const dataStart = entry.localOffset + 30 + nameLength + extraLength;
@@ -406,11 +415,12 @@ async function inspectZipFile(filePath, options = {}) {
 function destinationFor(root, parts) {
   const resolvedRoot = path.resolve(root);
   let current = resolvedRoot;
-  for (const part of parts) {
+  for (let index = 0; index < parts.length; index += 1) {
+    const part = parts[index];
     if (!part || part === '.' || part === '..' || part.includes('\u0000') || part.includes('/') || part.includes('\\') || part.includes(':')) {
       throw new ZipError('压缩包包含越界路径，已拒绝。', 'ZIP_PATH');
     }
-    current = path.resolve(resolvedRoot, ...parts.slice(0, parts.indexOf(part) + 1));
+    current = path.resolve(resolvedRoot, ...parts.slice(0, index + 1));
     if (fs.existsSync(current) && fs.lstatSync(current).isSymbolicLink()) {
       throw new ZipError('压缩包包含符号链接，已拒绝。', 'ZIP_SYMLINK');
     }
@@ -430,7 +440,7 @@ function writeEntries(root, entries) {
   for (const entry of entries) {
     if (entry.directory || String(entry.name || '').endsWith('/')) continue;
     const safe = safeEntryName(String(entry.name || ''));
-    const fold = safe.name.toLowerCase();
+    const fold = safe.name.normalize('NFC').toLowerCase();
     if (seen.has(fold)) throw new ZipError('压缩包内存在大小写重名的条目。', 'ZIP_DUPLICATE_NAME');
     seen.add(fold);
     const target = destinationFor(resolvedRoot, safe.parts);

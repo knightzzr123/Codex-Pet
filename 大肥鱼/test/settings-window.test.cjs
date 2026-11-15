@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const { resolveSettingsWindow } = require('../src/settings-window.cjs');
+const { resolveSettingsWindow, settingsCloseBlocked } = require('../src/settings-window.cjs');
 
 const root = path.join(__dirname, '..');
 const source = fs.readFileSync(path.join(root, 'src', 'settings.js'), 'utf8');
@@ -60,6 +60,34 @@ function fixture() {
     emitWindow: (name, extra = {}) => listeners.get(name)?.({ preventDefault() {}, ...extra })
   };
 }
+
+test('设置窗开着时 app.quit 能完成', () => {
+  const settings = {
+    __allowClose: false,
+    closed: false,
+    requested: false,
+    isDestroyed() { return this.closed; },
+    close() {
+      if (settingsCloseBlocked(this)) {
+        this.requested = true;
+        return;
+      }
+      this.closed = true;
+    }
+  };
+  settings.close();
+  assert.equal(settings.closed, false);
+  assert.equal(settings.requested, true);
+  settings.__allowClose = true;
+  settings.close();
+  assert.equal(settings.closed, true);
+  assert.equal(settingsCloseBlocked({ __loadFailed: true }), false);
+  assert.equal(settingsCloseBlocked({ __rendererGone: true }), false);
+  const main = fs.readFileSync(path.join(root, 'src', 'main.cjs'), 'utf8');
+  assert.match(main, /before-quit/);
+  assert.match(main, /settingsWindow\.__allowClose = true/);
+  assert.match(main, /settingsWindow\.close\(\)/);
+});
 
 test('已有设置窗口时只聚焦，不新建', () => {
   const existing = { focused: false, shown: false, focus() { this.focused = true; }, show() { this.shown = true; } };

@@ -157,6 +157,28 @@ test('跨 webContents 使用 token', async t => {
   assert.equal(JSON.stringify(owner).includes(root), false);
 });
 
+test('并发 commit 第二次直接作废，不重复写入', async t => {
+  const root = temporary(t);
+  const library = new SkinPackLibrary(root);
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const session = createSkinPackSession({
+    library,
+    validateImage: () => gate,
+    now: () => 1_000_000
+  });
+  const registered = session.register(writePack(root, 12, '并发'), 1);
+  assert.equal((await session.preview(registered.token, 1)).ok, true);
+  const first = session.commit(registered.token, 1);
+  const second = await session.commit(registered.token, 1);
+  assert.equal(second.ok, false);
+  assert.equal(second.code, 'TOKEN_INVALID');
+  release();
+  const done = await first;
+  assert.equal(done.ok, true);
+  assert.equal(library.list().length, 1);
+});
+
 test('重复 commit', async t => {
   const root = temporary(t);
   const { library, session } = sessionFor(root);

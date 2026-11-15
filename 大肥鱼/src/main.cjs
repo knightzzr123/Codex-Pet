@@ -27,7 +27,7 @@ const { createCodexSessionProbe } = require('./codex-session-probe.cjs');
 const { createSessionStateTracker, sessionPresentation } = require('./session-state.cjs');
 const { VIEWPORT, inputRegions } = require('./layout.cjs');
 const { openSettingsWindow, getSettingsWindow } = require('./settings-window.cjs');
-const { noteDisplay, relocateToVisibleDisplay, planScreenEvent, nearestDisplay, SCREEN_EVENT_DELAY_MS } = require('./display-layout.cjs');
+const { noteDisplay, relocateToVisibleDisplay, planScreenEvent, mergeScreenEvent, nearestDisplay, SCREEN_EVENT_DELAY_MS } = require('./display-layout.cjs');
 const { createSkinPackSession } = require('./skin-pack-session.cjs');
 const { version: APP_VERSION, DISPLAY_VERSION } = require('./version-info.cjs');
 const {
@@ -803,10 +803,13 @@ else {
     const relocated = relocateToVisibleDisplay(bounds, displays, nearest);
     if (relocated) win.setBounds({ x: relocated.x, y: relocated.y, width: relocated.width, height: relocated.height });
   }
+  let pendingScreen = null;
   function scheduleScreenEvent(kind, changedMetrics) {
+    pendingScreen = mergeScreenEvent(pendingScreen, { kind, changedMetrics });
     if (screenTimer) clearTimeout(screenTimer);
-    const payload = { kind, changedMetrics };
     screenTimer = setTimeout(() => {
+      const payload = pendingScreen;
+      pendingScreen = null;
       screenTimer = null;
       applyScreenEvent(payload);
     }, SCREEN_EVENT_DELAY_MS);
@@ -1555,6 +1558,18 @@ else {
     console.error(error); app.exit(1);
   });
   app.on('second-instance', () => { if (win) updateScope(scope); });
-  app.on('before-quit', () => { closing = true; try { skinPackSession.releaseAll(); } catch {} try { cancelSettle({ apply: true }); } catch {} clearInterval(interval); clearInterval(pluginInterval); if (sessionTimer) clearTimeout(sessionTimer); scopeMonitor?.stop(); try { scopeVisibility?.flush(); } catch {}; flushPersistentState(); });
+  app.on('before-quit', () => {
+    closing = true;
+    try {
+      const settingsWindow = getSettingsWindow();
+      if (settingsWindow && !settingsWindow.isDestroyed()) {
+        settingsWindow.__allowClose = true;
+        settingsWindow.close();
+      }
+    } catch { /* quit must not wait on the settings window */ }
+    try { skinPackSession.releaseAll(); } catch {}
+    try { cancelSettle({ apply: true }); } catch {}
+    clearInterval(interval); clearInterval(pluginInterval); if (sessionTimer) clearTimeout(sessionTimer); scopeMonitor?.stop(); try { scopeVisibility?.flush(); } catch {}; flushPersistentState();
+  });
   app.on('will-quit', flushPersistentState);
 }

@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const {
-  scaleFactorOf, displayForRect, crossedDisplay, noteDisplay, relocateToVisibleDisplay, dipAreaForScope
+  scaleFactorOf, displayForRect, crossedDisplay, noteDisplay, relocateToVisibleDisplay, dipAreaForScope, mergeScreenEvent
 } = require('../src/display-layout.cjs');
 
 const laptop = { id: 1, scaleFactor: 1.5, primary: true, bounds: { x: 0, y: 0, width: 1920, height: 1080 }, workArea: { x: 0, y: 0, width: 1920, height: 1040 } };
@@ -41,6 +41,16 @@ test('display-removed 后把完全看不见的窗口拉回主屏工作区', () =
   assert.ok(stranded.x >= laptop.workArea.x);
   assert.ok(stranded.x + stranded.width <= laptop.workArea.x + laptop.workArea.width);
   assert.ok(stranded.y + stranded.height <= laptop.workArea.y + laptop.workArea.height);
+});
+
+test('removed 后的 metrics 不会冲掉 removed', () => {
+  const removed = mergeScreenEvent(null, { kind: 'removed' });
+  const merged = mergeScreenEvent(removed, { kind: 'metrics', changedMetrics: ['scaleFactor', 'bounds'] });
+  assert.equal(merged.kind, 'removed');
+  assert.deepEqual(merged.changedMetrics.sort(), ['bounds', 'scaleFactor']);
+  const added = mergeScreenEvent({ kind: 'metrics', changedMetrics: ['workArea'] }, { kind: 'added' });
+  assert.equal(added.kind, 'added');
+  assert.deepEqual(added.changedMetrics, ['workArea']);
 });
 
 test('currentArea 仍调用 screenToDipRect(null, scopeRect)，不改成窗口', () => {
