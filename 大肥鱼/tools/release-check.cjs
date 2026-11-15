@@ -189,13 +189,13 @@ function verifySha256Sums(packageRoot) {
   const candidates = [path.join(path.dirname(root), 'SHA256SUMS'), path.join(root, 'SHA256SUMS')];
   const sumsFile = candidates.find(file => fs.existsSync(file) && fs.statSync(file).isFile());
   if (!sumsFile) return { checked: false, errors };
-  const text = fs.readFileSync(sumsFile, 'utf8');
-  if (text.includes('\r')) errors.push('SHA256SUMS 必须使用 LF 换行');
+  // Windows tooling may still emit CRLF; both LF and CRLF are accepted.
+  const text = fs.readFileSync(sumsFile, 'utf8').replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n');
   const dir = path.dirname(sumsFile);
   let verified = 0;
   for (const line of text.split('\n')) {
     if (!line) continue;
-    const match = /^([0-9a-f]{64})  (.+)$/.exec(line);
+    const match = /^([0-9a-f]{64})\s+\*?(.+)$/i.exec(line);
     if (!match) { errors.push('SHA256SUMS 行格式无效'); continue; }
     const file = path.join(dir, match[2]);
     if (!fs.existsSync(file) || !fs.statSync(file).isFile()) {
@@ -287,5 +287,5 @@ function run(argv = process.argv.slice(2)) {
 if (require.main === module) process.exitCode = run();
 module.exports = {
   REQUIRED_FILES, DATA_FILES, inspectPackageTree, copyTree, seedUserData, snapshotData,
-  simulateInstall, simulateUninstall, simulateUpgrade, writeFixturePackage, runSelfCheck, run
+  simulateInstall, simulateUninstall, simulateUpgrade, writeFixturePackage, verifySha256Sums, runSelfCheck, run
 };

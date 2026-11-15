@@ -1,11 +1,52 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const {
-  inspectPackageTree, writeFixturePackage, runSelfCheck, simulateInstall, simulateUninstall, simulateUpgrade
+  inspectPackageTree, writeFixturePackage, runSelfCheck, simulateInstall, simulateUninstall, simulateUpgrade, verifySha256Sums
 } = require('../tools/release-check.cjs');
+
+function sha256(file) {
+  return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+}
+
+test('SHA256SUMS 同时接受 LF 与 CRLF 换行，并继续校验内容', () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'dafeiyu-sums-'));
+  try {
+    const root = writeFixturePackage(path.join(base, 'package'), '1.0.0');
+    const artifact = path.join(base, '大肥鱼-3.4.0.zip');
+    fs.writeFileSync(artifact, 'release-bytes');
+    const sums = path.join(base, 'SHA256SUMS');
+    const digest = sha256(artifact);
+    fs.writeFileSync(sums, `${digest}  ${path.basename(artifact)}\n`);
+    let result = verifySha256Sums(root);
+    assert.equal(result.checked, true);
+    assert.equal(result.verified, 1);
+    assert.deepEqual(result.errors, []);
+
+    fs.writeFileSync(sums, `${digest}  ${path.basename(artifact)}\r\n`);
+    result = verifySha256Sums(root);
+    assert.equal(result.checked, true);
+    assert.equal(result.verified, 1);
+    assert.deepEqual(result.errors, []);
+
+    fs.writeFileSync(sums, `${'0'.repeat(64)}  ${path.basename(artifact)}\r\n`);
+    result = verifySha256Sums(root);
+    assert.ok(result.errors.some(error => /不一致/.test(error)));
+
+    fs.writeFileSync(sums, `${digest}  missing.zip\r\n`);
+    result = verifySha256Sums(root);
+    assert.ok(result.errors.some(error => /不存在/.test(error)));
+  } finally { fs.rmSync(base, { recursive: true, force: true }); }
+});
+
+test('package.py 用 LF 写 SHA256SUMS（Windows 上也不写 CRLF）', () => {
+  const script = fs.readFileSync(path.join(__dirname, '..', 'tools', 'package.py'), 'utf8');
+  assert.match(script, /sums_path\.write_text\([\s\S]*?newline='\\n'\)/);
+  assert.match(script, /metadata_directory \/ 'SHA256SUMS'\)\.write_text\([\s\S]*?newline='\\n'\)/);
+});
 
 test('Release 自检覆盖安装、卸载、升级保留数据三条路径', () => {
   const report = runSelfCheck({ keep: true });
