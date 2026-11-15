@@ -386,7 +386,9 @@ async function run(argv = process.argv.slice(2)) {
   console.log(`已执行 ${result.applied.length} 项修复${result.logFile ? `，日志：${result.logFile}` : ''}`);
   const after = buildReport(root, { codexPath });
   printReport(after);
-  return after.ok ? 0 : 1;
+  // A successful partial repair still needs a non-zero exit so release/CI
+  // cannot mistake an unrepaired runtime or MCP registration for success.
+  return after.ok && !plan.blocked.length ? 0 : 1;
 }
 
 if (require.main === module) {
