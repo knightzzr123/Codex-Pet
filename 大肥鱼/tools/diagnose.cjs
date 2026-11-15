@@ -6,9 +6,10 @@ const os = require('node:os');
 const readline = require('node:readline');
 const { execFileSync, spawnSync } = require('node:child_process');
 const { getDataDir, getWorkDir } = require('../src/paths.cjs');
+const { IDLE_BUDGET } = require('../src/idle-budget.js');
 
 const requiredFiles = ['plugin.json', 'prepare-runtime.ps1', 'runtime-manifest.json', 'src/plugin-server.cjs', '.agents/plugins/marketplace.json', 'package.json', 'README.md'];
-const artifactNames = ['session-state.json', 'smoke-report.json', 'startup-smoke-report.json', 'startup-error.txt', 'scope-status.json', 'runtime.json', 'startup-timing.json', '.dafeiyu-ready.json'];
+const artifactNames = ['session-state.json', 'smoke-report.json', 'startup-smoke-report.json', 'startup-error.txt', 'scope-status.json', 'runtime.json', 'startup-timing.json', 'idle-budget.json', '.dafeiyu-ready.json'];
 const exists = (file) => { try { return fs.existsSync(file); } catch { return false; } };
 const hashFile = (file) => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 const readJson = (file) => JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
@@ -62,7 +63,7 @@ function inspectMcpRegistration(codexPath, options = {}) {
 
 function buildReport(root, options = {}) {
   const env = options.env || process.env;
-  const report = { root: path.resolve(root), ok: true, errors: [], warnings: [], checks: {}, artifacts: [], codex: {} };
+  const report = { root: path.resolve(root), ok: true, errors: [], warnings: [], checks: { idleBudget: IDLE_BUDGET }, artifacts: [], codex: {} };
   const addError = (message) => report.errors.push(message);
   const markerPath = path.join(root, 'PACKAGE-TYPE.json');
   let marker = null;

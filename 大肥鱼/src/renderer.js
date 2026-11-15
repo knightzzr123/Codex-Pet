@@ -125,7 +125,15 @@ function showQuota() {
   render();
   window.petAPI.refresh();
 }
+let idleTicksSkipped = 0;
 function tick() {
+  const plan = globalThis.DafeiyuIdleBudget?.rendererTickPlan?.({
+    now: Date.now(), bubbleOpen: bubbleIsOpen(), settingsOpen, loading: state.loading,
+    lastIdleAt, idleIntervalMs: idleIntervalMs(), hidden: Boolean(document.hidden)
+  });
+  // While idle there is nothing to paint: the session chip and quota arrive as
+  // push events, and a closed bubble has no visible countdown.
+  if (plan && !plan.wake) { idleTicksSkipped += 1; return; }
   // TIMEOUTSIGNAL becomes an in-character sleepy sign-off before closing.
   if (pauseStarted === null && dialogueStarted && !sleepyReplyShown && Date.now() >= bubbleUntil) {
     if (!sleepyLines.length) { closeBubble(); return; }
@@ -677,4 +685,21 @@ function receiveState(next) {
 }
 window.petAPI.onState(receiveState);
 window.petAPI.getState().then(receiveState);
-setInterval(tick, 1000);
+
+let tickerHandle = null;
+function startTicker() {
+  if (tickerHandle !== null) return;
+  tickerHandle = setInterval(tick, 1000);
+}
+function stopTicker() {
+  if (tickerHandle === null) return;
+  if (typeof clearInterval === 'function') clearInterval(tickerHandle);
+  tickerHandle = null;
+}
+startTicker();
+// Hidden means Codex was minimized/tucked away; no visible countdown or idle
+// animation is needed, so suspend the 1s tick entirely until it returns.
+document.addEventListener?.('visibilitychange', () => {
+  if (document.hidden) stopTicker();
+  else startTicker();
+});

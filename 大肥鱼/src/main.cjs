@@ -42,11 +42,13 @@ app.setName('大肥鱼 · Codex Pet');
 app.setPath('userData', smokeTest ? path.join(work, 'smoke-data') : dataDir);
 if (!app.requestSingleInstanceLock()) { app.quit(); }
 else {
-  let win, interval, scopeMonitor, pluginInterval, sessionInterval, sessionTracker, functionMenu;
+  let win, interval, scopeMonitor, pluginInterval, sessionTimer, sessionTracker, functionMenu;
   let scope = { active: false };
   let closing = false;
   let refreshPromise = null;
   let lastAttempt = 0;
+  let lastRuntimeSavedAt = 0;
+  let lastSessionVisible = null;
   let inputBubble = false;
   let inputRegionKey = '';
   let drag = null;
@@ -124,11 +126,34 @@ else {
       writeJsonAtomic(path.join(work, 'session-state.json'), { ...sessionPresentation(snapshot), activityAt: snapshot.activityAt, errorAt: snapshot.errorAt, checkedAt: new Date().toISOString() });
     } catch {}
   }
+  function sessionVisible() {
+    return Boolean(win && !win.isDestroyed() && win.isVisible() && shouldShow(scope));
+  }
+  function scheduleSessionProbe({ immediate = false } = {}) {
+    if (smokeTest || !sessionTracker) return;
+    if (sessionTimer) { clearTimeout(sessionTimer); sessionTimer = null; }
+    const visible = sessionVisible();
+    lastSessionVisible = visible;
+    const delay = immediate ? 0 : sessionProbeDelay({ visible });
+    sessionTimer = setTimeout(() => {
+      sessionTimer = null;
+      try { if (!closing) sessionTracker.sample(); } catch {}
+      scheduleSessionProbe();
+    }, delay);
+  }
   function startSessionProbe() {
-    if (sessionInterval || !sessionTracker) return;
+    if (!sessionTracker) return;
     writeSessionStatus(sessionTracker.snapshot());
     sessionTracker.sample();
-    sessionInterval = setInterval(() => { sessionTracker?.sample(); }, 5000);
+    scheduleSessionProbe();
+  }
+  // Only hidden->visible changes need an immediate sample; ordinary scope
+  // updates must not turn this into a 1s foreground probe.
+  function refreshSessionSchedule() {
+    if (smokeTest || !sessionTracker) return;
+    const visible = sessionVisible();
+    if (visible === lastSessionVisible) return;
+    scheduleSessionProbe({ immediate: visible });
   }
   function flushPersistentState() {
     try { preferencesWriter.flush(); } catch {}
@@ -142,6 +167,19 @@ else {
       startedAt: startupStartedAt, updatedAt: Date.now()
     }));
     fs.renameSync(temporary, file);
+    lastRuntimeSavedAt = Date.now();
+  }
+  function writeIdleBudgetSnapshot(reason) {
+    try {
+      const visible = sessionVisible();
+      fs.mkdirSync(work, { recursive: true });
+      writeJsonAtomic(path.join(work, 'idle-budget.json'), {
+        budget: IDLE_BUDGET, reason, visible,
+        sessionProbeMs: sessionProbeDelay({ visible }),
+        pluginPollMs: pluginPollDelay(),
+        updatedAt: new Date().toISOString()
+      });
+    } catch {}
   }
   function applyExperienceChrome() {
     const experience = experienceFromPreferences(preferences);
@@ -680,6 +718,7 @@ else {
     }
     // Skip disk I/O while the user is dragging to avoid frame drops.
     if (!drag) publishScopeStatus(false);
+    try { refreshSessionSchedule(); } catch {}
   }
   function startScopeMonitor() {
     const handle = win.getNativeWindowHandle();
@@ -1228,6 +1267,7 @@ else {
     screen.on('display-removed', positionWindow);
     screen.on('display-added', positionWindow);
     await loadRenderer();
+    writeIdleBudgetSnapshot('startup');
     if (smokeTest) {
       // Native monitoring first compiles its interop helper. Wait for a usable
       // Codex observation before exercising size changes and focus recovery.
@@ -1252,8 +1292,10 @@ else {
         if (isDisabled() || windowLifetime.shouldExit(active)) {
           logLifecycle({ event: 'plugin-exit', reason: active ? 'plugin-disabled-or-codex-exited' : 'codex-exited-or-never-bound' });
           app.quit();
-        } else { try { saveRuntime(); } catch {} }
-      }, 1500);
+        } else if (shouldSaveRuntime({ now: Date.now(), lastSavedAt: lastRuntimeSavedAt })) {
+          try { saveRuntime(); } catch {}
+        }
+      }, pluginPollDelay());
     }
   }).catch(error => {
     fs.mkdirSync(work, { recursive: true });
@@ -1261,6 +1303,6 @@ else {
     console.error(error); app.exit(1);
   });
   app.on('second-instance', () => { if (win) updateScope(scope); });
-  app.on('before-quit', () => { closing = true; try { cancelSettle({ apply: true }); } catch {} clearInterval(interval); clearInterval(pluginInterval); clearInterval(sessionInterval); scopeMonitor?.stop(); try { scopeVisibility?.flush(); } catch {}; flushPersistentState(); });
+  app.on('before-quit', () => { closing = true; try { cancelSettle({ apply: true }); } catch {} clearInterval(interval); clearInterval(pluginInterval); if (sessionTimer) clearTimeout(sessionTimer); scopeMonitor?.stop(); try { scopeVisibility?.flush(); } catch {}; flushPersistentState(); });
   app.on('will-quit', flushPersistentState);
 }

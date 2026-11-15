@@ -1,7 +1,8 @@
 const readline = require('node:readline');
 
 function createScopeMonitor({ launch, onScope, onDiagnostic = () => {}, now = Date.now,
-  setTimer = setTimeout, clearTimer = clearTimeout, setWatch = setInterval, clearWatch = clearInterval }) {
+  heartbeatMs = 2000, setTimer = setTimeout, clearTimer = clearTimeout,
+  setWatch = setInterval, clearWatch = clearInterval }) {
   let child, lines, restart, watch, stopped = true, failures = 0, lastOutput = 0, observed = false, samples = 0;
   function schedule(reason, detail) {
     if (stopped || restart) return;
@@ -38,7 +39,7 @@ function createScopeMonitor({ launch, onScope, onDiagnostic = () => {}, now = Da
       stopped = false; startChild();
       watch = setWatch(() => {
         if (!stopped && child && now() - lastOutput > (observed ? 5000 : 30000)) schedule('heartbeat-timeout');
-      }, 1000);
+      }, heartbeatMs);
     },
     stop() {
       stopped = true; clearTimer(restart); clearWatch(watch);
