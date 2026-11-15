@@ -76,10 +76,12 @@ test('设置窗开着时 app.quit 能完成', () => {
     __allowClose: false,
     closed: false,
     requested: false,
+    prevented: 0,
     isDestroyed() { return this.closed; },
     close() {
       if (settingsCloseBlocked(this)) {
         this.requested = true;
+        this.prevented += 1;
         return;
       }
       this.closed = true;
@@ -88,15 +90,20 @@ test('设置窗开着时 app.quit 能完成', () => {
   settings.close();
   assert.equal(settings.closed, false);
   assert.equal(settings.requested, true);
+  assert.equal(settings.prevented, 1);
   settings.__allowClose = true;
   settings.close();
   assert.equal(settings.closed, true);
+  assert.equal(settings.prevented, 1, '退出标志设置后 close 不再 preventDefault');
   assert.equal(settingsCloseBlocked({ __loadFailed: true }), false);
   assert.equal(settingsCloseBlocked({ __rendererGone: true }), false);
   const main = fs.readFileSync(path.join(root, 'src', 'main.cjs'), 'utf8');
   assert.match(main, /before-quit/);
   assert.match(main, /settingsWindow\.__allowClose = true/);
   assert.match(main, /settingsWindow\.close\(\)/);
+  const quit = main.slice(main.indexOf("app.on('before-quit'"));
+  assert.ok(quit.indexOf('settingsWindow.__allowClose = true') < quit.indexOf('settingsWindow.close()'),
+    'before-quit 必须先设标志再关闭设置窗口');
 });
 
 test('已有设置窗口时只聚焦，不新建', () => {
