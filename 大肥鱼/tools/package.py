@@ -16,7 +16,7 @@ runtime_source.add_argument('--runtime-archive', type=Path, help='Use a standalo
 parser.add_argument('--output', type=Path, required=True)
 parser.add_argument('--verify-directory', type=Path)
 parser.add_argument('--metadata-directory', type=Path)
-parser.add_argument('--version', default='3.3.2')
+parser.add_argument('--version', default='3.3.1')
 args = parser.parse_args()
 root = args.root.resolve()
 output = args.output.resolve()
@@ -74,6 +74,14 @@ with zipfile.ZipFile(output, 'x', compression=zipfile.ZIP_DEFLATED, compressleve
     with contextlib.ExitStack() as stack:
         if args.original:
             original = stack.enter_context(zipfile.ZipFile(args.original))
+            marker_entries = [entry for entry in original.infolist() if entry.filename.endswith('/PACKAGE-TYPE.json') or entry.filename == 'PACKAGE-TYPE.json']
+            if marker_entries:
+                try:
+                    original_marker = json.loads(original.read(marker_entries[0]))
+                except (ValueError, IndexError):
+                    raise ValueError('Input ZIP has an invalid PACKAGE-TYPE.json marker.')
+                if original_marker.get('packageType') == 'source':
+                    raise ValueError('Input ZIP is a source package; --original requires a complete installation ZIP.')
             candidates = [entry for entry in original.infolist() if entry.filename.endswith('/runtime.7z') or entry.filename == 'runtime.7z']
             if len(candidates) != 1:
                 raise ValueError('Input ZIP must contain one runtime archive.')
@@ -96,6 +104,13 @@ with zipfile.ZipFile(output, 'x', compression=zipfile.ZIP_DEFLATED, compressleve
         if checksum.hexdigest() != manifest['sha256']:
             raise ValueError('Original runtime payload does not match manifest.')
         hashes['runtime.7z'] = checksum.hexdigest()
+    package_marker = {
+        'packageType': 'complete', 'installable': True,
+        'description': 'Win64 完整安装包，包含经过 manifest 校验的运行时。',
+        'version': args.version, 'runtimeBytes': payload_bytes,
+        'runtimeSha256': manifest['sha256'],
+    }
+    add_bytes(release, 'PACKAGE-TYPE.json', (json.dumps(package_marker, ensure_ascii=False, indent=2) + '\n').encode('utf-8'))
     checksums = ''.join(f'{checksum}  {name}\n' for name, checksum in sorted(hashes.items()))
     add_bytes(release, 'FILES.sha256', checksums.encode('utf-8'))
 
@@ -136,7 +151,7 @@ checksum = digest(output)
 metadata_directory.mkdir(parents=True, exist_ok=True)
 (metadata_directory / (output.name + '.sha256')).write_text(f'{checksum}  {output.name}\n', encoding='utf-8')
 report = {
-    'version': args.version, 'archive': str(output), 'bytes': output.stat().st_size,
+    'packageType': 'complete', 'version': args.version, 'archive': str(output), 'bytes': output.stat().st_size,
     'sha256': checksum, 'files': len(hashes), 'zipCrcVerified': True,
     'extractedHashesVerified': True, 'portableMcp': True, 'verifiedDirectory': str(package),
     'runtimeSha256': manifest['sha256'], 'copiedSources': copied_sources,
