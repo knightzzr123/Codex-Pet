@@ -17,8 +17,10 @@ let previousRemaining = null;
 let otherRowsText = '';
 let pauseStarted = null;
 let settingsOpen = false;
+let settingsReturnFocus = null;
 let idleTimer = null;
 let lastIdleAt = Date.now();
+let lastInteractionAt = Date.now();
 let lastSessionToastId = 0;
 let sessionToastTimer = null;
 const reading = new Set();
@@ -76,7 +78,12 @@ const { DEFAULT_DIALOGUES, fitDialogue } = globalThis.DafeiyuDialogue;
 let speechLines = [...DEFAULT_DIALOGUES.speech];
 let sleepyLines = [...DEFAULT_DIALOGUES.sleepy];
 let dialogueKey = '';
+const dialogueTrigger = globalThis.DafeiyuDialogueTriggers?.createDialogueTrigger?.() || null;
 const emptySpeech = '还没有日常台词，右键打开“编辑台词”添加一句吧。';
+
+function markInteraction() {
+  lastInteractionAt = Date.now();
+}
 
 function setSpeech(text) {
   speechAnimation?.cancel();
@@ -88,13 +95,27 @@ function setSpeech(text) {
     { opacity: 1, transform: 'translateY(0)' }
   ], { duration: MOTION.micro, easing: MOTION.ease });
 }
-function speak() {
+function speak(trigger = 'click') {
+  const decision = dialogueTrigger?.trigger?.(trigger, {
+    lines: speechLines,
+    sessionState: state.session?.state || 'idle',
+    idleIntervalSec: state.experience?.idleIntervalSec,
+    interactionAt: lastInteractionAt,
+    bubbleOpen: bubbleIsOpen()
+  });
+  // Idle chatter yields to cooldowns, session busy/error and duplicate lines;
+  // an explicit click always still does something.
+  if (trigger === 'idle' && !decision?.ok) return false;
+  const text = decision?.ok
+    ? decision.text
+    : speechLines.length ? speechLines[speechIndex++ % speechLines.length] : emptySpeech;
   bubbleMode = 'dialogue';
-  setSpeech(speechLines.length ? speechLines[speechIndex++ % speechLines.length] : emptySpeech);
+  setSpeech(text);
   dialogueStarted = true;
   sleepyReplyShown = false;
   renewBubble();
   render();
+  return true;
 }
 function showQuota() {
   bubbleMode = 'quota';
@@ -276,6 +297,13 @@ function setSettingsOpen(open) {
   document.body.classList.toggle('settings-open', settingsOpen);
   // Keep native hit-testing large enough for the panel without blocking pet drag when closed.
   globalThis.petAPI.setInputRegion(settingsOpen || bubbleIsOpen());
+  if (settingsOpen) {
+    $('settings-close')?.focus?.({ preventScroll: true });
+  } else {
+    const target = settingsReturnFocus && settingsReturnFocus !== document.body ? settingsReturnFocus : $('pet');
+    try { target?.focus?.({ preventScroll: true }); } catch {}
+    settingsReturnFocus = null;
+  }
 }
 
 function maybeIdleAction() {
@@ -283,6 +311,9 @@ function maybeIdleAction() {
   if (Date.now() - lastIdleAt < idleIntervalMs()) return;
   lastIdleAt = Date.now();
   playIdleNudge();
+  // Idle speech is optional: the trigger module applies the long cooldown,
+  // session-state suppression and line deduplication.
+  speak('idle');
 }
 
 function playIdleNudge() {
@@ -403,6 +434,7 @@ function render() {
 
 function pat() {
   lastIdleAt = Date.now();
+  markInteraction();
   if (state.experience?.advanceOnPetTap && bubbleIsOpen()) speak();
   else showQuota();
   playReaction();
@@ -411,6 +443,7 @@ function playReaction() {
   cancelPetMotion();
   reactionAnimation?.cancel();
   lastIdleAt = Date.now();
+  markInteraction();
   if (reducedMotion()) return;
   petAnimation = $('pet-image').animate([
     { transform: 'translateY(0) scale(1, 1)', offset: 0 },
@@ -457,6 +490,7 @@ $('pet').addEventListener('pointerdown', event => {
   // Settings panel stays open; dragging the pet must still work (panel does not capture pet).
   cancelDrag();
   cancelPetMotion();
+  markInteraction();
   suppressClick = false;
   pointerDrag = { id: event.pointerId, x: event.screenX, y: event.screenY, moved: false, menuOpened: false };
   setReading('drag', true);
@@ -517,6 +551,7 @@ $('pet').addEventListener('lostpointercapture', releaseDrag);
 $('refresh').addEventListener('click', () => window.petAPI.refresh());
 $('bubble').addEventListener('click', event => {
   if (event.target.closest('#refresh, #other-windows')) return;
+  markInteraction();
   speak();
   playReaction();
 });
@@ -531,6 +566,7 @@ $('bubble').addEventListener('focusout', event => {
 $('bubble').addEventListener('keydown', event => {
   if (event.target !== $('bubble') || !['Enter', ' '].includes(event.key)) return;
   event.preventDefault();
+  markInteraction();
   speak();
   playReaction();
 });
@@ -628,6 +664,7 @@ function receiveState(next) {
       dialogueKey = nextKey;
       speechLines = [...library.speech]; sleepyLines = [...library.sleepy];
       speechIndex = 0; sleepyIndex = 0;
+      dialogueTrigger?.reset?.();
       if (wasOpen && bubbleMode === 'dialogue') {
         setSpeech(sleepyReplyShown && sleepyLines.length ? sleepyLines[sleepyIndex++ % sleepyLines.length]
           : speechLines.length ? speechLines[speechIndex++ % speechLines.length] : emptySpeech);
