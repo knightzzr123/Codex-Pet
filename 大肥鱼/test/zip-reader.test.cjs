@@ -222,6 +222,35 @@ test('图片可以放在顶层目录的子目录里，manifest 超过一层仍�
   ])), error => error.code === 'ZIP_MANIFEST_LOCATION' && /manifest\.json/.test(error.message) && /一层/.test(error.message));
 });
 
+test('B14：引用子目录图片的合法 ZIP 可完整预览并导入', async t => {
+  const root = temporary(t);
+  const zip = path.join(root, 'subdir.zip');
+  const manifest = Buffer.from(JSON.stringify({
+    manifestVersion: 1, name: '子目录图', version: '1.0.0',
+    characters: [{ id: 'whale', name: '鲸鱼', image: 'images/a.png', thumbnail: 'thumbs/a.png' }]
+  }));
+  fs.writeFileSync(zip, buildZip([
+    { name: 'MyPack/manifest.json', data: manifest },
+    { name: 'MyPack/images/a.png', data: png(80, 80, 7) },
+    { name: 'MyPack/thumbs/a.png', data: png(64, 64, 8) },
+    { name: 'MyPack/images/extra.png', data: png(80, 80, 9) }
+  ]));
+  const library = new SkinPackLibrary(root);
+  const preview = await library.previewZip(zip);
+  assert.equal(preview.name, '子目录图');
+  assert.equal(preview.installedName, '子目录图');
+  assert.match(preview.characters[0].thumbnailUrl, /^data:image\/png;base64,/);
+  const imported = await library.importZip(zip, async () => {});
+  assert.equal(imported.name, '子目录图');
+  assert.ok(fs.existsSync(imported.characters[0].file));
+  assert.ok(fs.existsSync(imported.characters[0].thumbnailFile));
+  assert.deepEqual(fs.readdirSync(imported.directory).filter(name => name.endsWith('.png')).sort(),
+    ['c-0-whale.png', 't-0-whale.png']);
+  const installed = JSON.parse(fs.readFileSync(path.join(imported.directory, 'manifest.json'), 'utf8'));
+  assert.equal(installed.characters[0].source.image, 'images/a.png');
+  assert.equal(installed.characters[0].source.thumbnail, 'thumbs/a.png');
+});
+
 test('data descriptor：本地头为 0 时以中央目录为准，stored 与 deflate 都支持', async () => {
   const image = Buffer.from('png-bytes');
   for (const method of [0, 8]) {
