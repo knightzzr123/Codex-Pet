@@ -24,6 +24,9 @@ function buildZip(entries) {
     const crc = entry.crc ?? crc32(raw);
     const compressedSize = entry.compressedSize ?? stored.length;
     const uncompressedSize = entry.uncompressedSize ?? raw.length;
+    const localCrc = entry.localCrc ?? crc;
+    const localCompressedSize = entry.localCompressedSize ?? compressedSize;
+    const localUncompressedSize = entry.localUncompressedSize ?? uncompressedSize;
     const versionMadeBy = entry.versionMadeBy ?? 20;
     const externalAttributes = entry.externalAttributes ?? 0;
     const local = Buffer.alloc(30 + name.length);
@@ -31,14 +34,26 @@ function buildZip(entries) {
     local.writeUInt16LE(20, 4);
     local.writeUInt16LE(flags, 6);
     local.writeUInt16LE(method, 8);
-    local.writeUInt32LE(crc, 14);
-    local.writeUInt32LE(compressedSize, 18);
-    local.writeUInt32LE(uncompressedSize, 22);
+    local.writeUInt32LE(localCrc, 14);
+    local.writeUInt32LE(localCompressedSize, 18);
+    local.writeUInt32LE(localUncompressedSize, 22);
     local.writeUInt16LE(name.length, 26);
     name.copy(local, 30);
     const localOffset = offset;
     locals.push(local, stored);
     offset += local.length + stored.length;
+    if (entry.descriptor) {
+      const options = entry.descriptor === true ? {} : entry.descriptor;
+      const signed = options.signature !== false;
+      const descriptor = Buffer.alloc(signed ? 16 : 12);
+      let cursor = 0;
+      if (signed) { descriptor.writeUInt32LE(0x08074b50, 0); cursor = 4; }
+      descriptor.writeUInt32LE(options.crc ?? crc, cursor);
+      descriptor.writeUInt32LE(options.compressedSize ?? compressedSize, cursor + 4);
+      descriptor.writeUInt32LE(options.uncompressedSize ?? uncompressedSize, cursor + 8);
+      locals.push(descriptor);
+      offset += descriptor.length;
+    }
     const central = Buffer.alloc(46 + name.length);
     central.writeUInt32LE(0x02014b50, 0);
     central.writeUInt16LE(versionMadeBy, 4);
@@ -207,12 +222,52 @@ test('图片可以放在顶层目录的子目录里，manifest 超过一层仍�
   ])), error => error.code === 'ZIP_MANIFEST_LOCATION' && /manifest\.json/.test(error.message) && /一层/.test(error.message));
 });
 
-test('data descriptor 的本地头大小和 CRC 为 0 时以中央目录为准', async () => {
+test('data descriptor：本地头为 0 时以中央目录为准，stored 与 deflate 都支持', async () => {
   const image = Buffer.from('png-bytes');
+  for (const method of [0, 8]) {
+    for (const signature of [true, false]) {
+      const files = await readZipBuffer(buildZip([
+        { name: 'role.png', method, data: image, flags: 0x800 | 0x8,
+          localCrc: 0, localCompressedSize: 0, localUncompressedSize: 0,
+          descriptor: { signature } }
+      ]));
+      assert.equal(files[0].bytes.toString(), 'png-bytes', `method ${method} signature ${signature}`);
+    }
+  }
+  // The real macOS/jar shape: following entries and the central directory start
+  // right after a signed or unsigned descriptor.
   const files = await readZipBuffer(buildZip([
-    { name: 'role.png', data: image, flags: 0x800 | 0x8, localCrc: 0, localCompressedSize: 0, localUncompressedSize: 0 }
+    { name: 'a.png', data: image, flags: 0x800 | 0x8,
+      localCrc: 0, localCompressedSize: 0, localUncompressedSize: 0, descriptor: true },
+    { name: 'b.png', method: 8, data: Buffer.from('second'), flags: 0x800 | 0x8,
+      localCrc: 0, localCompressedSize: 0, localUncompressedSize: 0, descriptor: { signature: false } }
   ]));
-  assert.equal(files[0].bytes.toString(), 'png-bytes');
+  assert.deepEqual(files.map(file => file.bytes.toString()), ['png-bytes', 'second']);
+});
+
+test('data descriptor 与中央目录的 CRC 或大小不一致必须拒绝', async () => {
+  const image = Buffer.from('png-bytes');
+  const base = { name: 'role.png', data: image, flags: 0x800 | 0x8,
+    localCrc: 0, localCompressedSize: 0, localUncompressedSize: 0 };
+  await assert.rejects(() => readZipBuffer(buildZip([
+    { ...base, descriptor: { crc: 0xdeadbeef } }
+  ])), error => error.code === 'ZIP_HEADER');
+  await assert.rejects(() => readZipBuffer(buildZip([
+    { ...base, descriptor: { compressedSize: image.length + 7 } }
+  ])), error => error.code === 'ZIP_HEADER');
+  await assert.rejects(() => readZipBuffer(buildZip([
+    { ...base, descriptor: { signature: false, uncompressedSize: 1 } }
+  ])), error => error.code === 'ZIP_HEADER');
+});
+
+test('中央目录声明的未压缩大小必须与实际解压字节一致', async () => {
+  const image = Buffer.from('png-bytes');
+  await assert.rejects(() => readZipBuffer(buildZip([
+    { name: 'role.png', method: 8, data: image, uncompressedSize: image.length + 1 }
+  ])), error => error.code === 'ZIP_HEADER');
+  await assert.rejects(() => readZipBuffer(buildZip([
+    { name: 'role.png', method: 8, data: image, uncompressedSize: image.length - 1 }
+  ])), error => error.code === 'ZIP_LIMIT' || error.code === 'ZIP_HEADER');
 });
 
 test('重复路径段不会把符号链接检查指到错误的前缀', t => {

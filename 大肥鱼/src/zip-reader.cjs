@@ -260,6 +260,24 @@ function inflateRawLimited(input, maxBytes) {
   });
 }
 
+// A bit-3 entry may carry a trailing data descriptor. The central directory
+// stays authoritative, but a descriptor that is present must agree with it,
+// otherwise a tampered archive could hide mismatched sizes/CRC behind bit 3.
+function assertDataDescriptor(buffer, entry, dataEnd, nextBoundary) {
+  if (entry.directory) return;
+  const room = nextBoundary - dataEnd;
+  if (room < 12) return;
+  let start = dataEnd;
+  if (room >= 16 && buffer.readUInt32LE(dataEnd) === 0x08074b50) start = dataEnd + 4;
+  if (start + 12 > nextBoundary) return;
+  const crc = buffer.readUInt32LE(start);
+  const compressed = buffer.readUInt32LE(start + 4);
+  const uncompressed = buffer.readUInt32LE(start + 8);
+  if (crc !== entry.crc || compressed !== entry.compressedSize || uncompressed !== entry.uncompressedSize) {
+    throw new ZipError('数据描述符与中央目录的 CRC 或大小不一致。', 'ZIP_HEADER');
+  }
+}
+
 async function readEntryPayload(buffer, entry, limits) {
   if (entry.localOffset + 30 > buffer.length || buffer.readUInt32LE(entry.localOffset) !== 0x04034b50) {
     throw new ZipError('压缩包本地文件头损坏。', 'ZIP_FORMAT');
@@ -294,6 +312,7 @@ async function readEntryPayload(buffer, entry, limits) {
   const dataStart = entry.localOffset + 30 + nameLength + extraLength;
   const dataEnd = dataStart + entry.compressedSize;
   if (dataEnd > buffer.length) throw new ZipError('压缩包条目数据不完整。', 'ZIP_FORMAT');
+  if (dataDescriptor && !entry.directory) assertDataDescriptor(buffer, entry, dataEnd, entry.nextBoundary ?? dataEnd);
   if (entry.directory) return Buffer.alloc(0);
   const compressed = buffer.subarray(dataStart, dataEnd);
   const maxOutput = Math.min(entry.uncompressedSize, limits.maxEntryBytes);
@@ -314,6 +333,9 @@ async function readEntryPayload(buffer, entry, limits) {
   if (!compressed.length) throw new ZipError('压缩后大小为 0 但条目不是空文件，已拒绝。', 'ZIP_LIMIT');
   const output = await inflateRawLimited(compressed, maxOutput);
   if (output.length > maxOutput) throw new ZipError('解压后的条目超过大小或压缩比上限，已拒绝。', 'ZIP_LIMIT');
+  if (output.length !== entry.uncompressedSize) {
+    throw new ZipError('压缩包条目的大小与中央目录不一致。', 'ZIP_HEADER');
+  }
   if (output.length / compressed.length > limits.maxRatio) {
     throw new ZipError('单个条目压缩比超过 100:1，已拒绝。', 'ZIP_LIMIT');
   }
@@ -340,6 +362,19 @@ function assertNoOverlap(buffer, entries) {
     }
     ranges.push({ start: dataStart, end: dataEnd });
   }
+  return cdOffset;
+}
+
+function attachDescriptorBoundaries(buffer, entries, cdOffset) {
+  const offsets = entries.map(entry => entry.localOffset).sort((a, b) => a - b);
+  for (const entry of entries) {
+    if (entry.directory) { entry.nextBoundary = cdOffset; continue; }
+    const nameLength = buffer.readUInt16LE(entry.localOffset + 26);
+    const extraLength = buffer.readUInt16LE(entry.localOffset + 28);
+    const dataEnd = entry.localOffset + 30 + nameLength + extraLength + entry.compressedSize;
+    entry.nextBoundary = offsets.find(offset => offset > entry.localOffset) ?? cdOffset;
+    if (entry.nextBoundary < dataEnd) entry.nextBoundary = dataEnd;
+  }
 }
 
 function openZip(buffer, options = {}) {
@@ -349,7 +384,8 @@ function openZip(buffer, options = {}) {
   const limits = limitsFrom(options);
   if (buffer.length > limits.maxArchiveBytes) throw new ZipError('压缩包超过大小上限。', 'ZIP_LIMIT');
   const entries = parseCentralDirectory(buffer, limits);
-  assertNoOverlap(buffer, entries);
+  const cdOffset = assertNoOverlap(buffer, entries);
+  attachDescriptorBoundaries(buffer, entries, cdOffset);
   return {
     entries,
     limits,
