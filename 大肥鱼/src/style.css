@@ -73,6 +73,8 @@ body.face-left .dot-one { left: calc(175px + var(--bubble-offset-x)); transform:
 body.face-left .dot-two { left: calc(149px + var(--bubble-offset-x)); transform: rotate(-12deg); }
 body.face-left #reaction { right: auto; left: 77px; }
 #pet:hover #pet-image { filter: drop-shadow(0 0 5px #8ea9e94d); }
+#mascot[data-session="busy"] #pet-image { filter: saturate(1.08) drop-shadow(0 0 6px #d9985440); }
+#mascot[data-session="error"] #pet-image { filter: saturate(.72) drop-shadow(0 0 6px #d7666640); }
 .session-state {
   position: absolute; z-index: 8; right: 22px; bottom: 236px;
   display: flex; align-items: center; gap: 6px; max-width: 150px;
