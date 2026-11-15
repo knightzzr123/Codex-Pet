@@ -17,6 +17,8 @@ const { openSkinEditor, getEditorWindow } = require('./skin-editor.cjs');
 const { DialogueLibrary, defaultDialogues } = require('./dialogues.cjs');
 const { openDialogueEditor, getDialogueEditorWindow } = require('./dialogue-editor.cjs');
 const { BUBBLE_SECONDS, experienceFromPreferences } = require('./experience.cjs');
+const { createCodexSessionProbe } = require('./codex-session-probe.cjs');
+const { createSessionStateTracker, sessionPresentation } = require('./session-state.cjs');
 const { VIEWPORT, inputRegions } = require('./layout.cjs');
 const {
   interpolateBounds, interpolateZoom, boundsDiffer, zoomDiffer, settleDurationMs, createSettlePlayer
@@ -34,7 +36,7 @@ app.setName('大肥鱼 · Codex Pet');
 app.setPath('userData', smokeTest ? path.join(work, 'smoke-data') : dataDir);
 if (!app.requestSingleInstanceLock()) { app.quit(); }
 else {
-  let win, interval, scopeMonitor, pluginInterval, functionMenu;
+  let win, interval, scopeMonitor, pluginInterval, sessionInterval, sessionTracker, functionMenu;
   let scope = { active: false };
   let closing = false;
   let refreshPromise = null;
@@ -81,6 +83,12 @@ else {
   state.dialogues = smokeTest ? defaultDialogues() : dialogueLibrary.load();
   state.skin = skinState(preferences.skinId);
   preferences.skinId = state.skin.id;
+  const sessionProbe = createCodexSessionProbe({ now: Date.now });
+  sessionTracker = createSessionStateTracker({
+    probe: () => sessionProbe.sample(),
+    onUpdate: snapshot => { writeSessionStatus(snapshot); publish(); }
+  });
+  state.session = sessionPresentation(sessionTracker.snapshot());
   try { state.quota = JSON.parse(fs.readFileSync(path.join(initialData, 'quota-cache.json'), 'utf8')); state.stale = true; } catch {}
 
   const preferencesWriter = createCoalescedWriter({
@@ -103,6 +111,17 @@ else {
     }
     preferencesWriter.schedule(snapshot);
   }
+  function writeSessionStatus(snapshot) {
+    try {
+      fs.mkdirSync(work, { recursive: true });
+      writeJsonAtomic(path.join(work, 'session-state.json'), { ...sessionPresentation(snapshot), activityAt: snapshot.activityAt, errorAt: snapshot.errorAt, checkedAt: new Date().toISOString() });
+    } catch {}
+  }
+  function startSessionProbe() {
+    if (sessionInterval || !sessionTracker) return;
+    sessionTracker.sample();
+    sessionInterval = setInterval(() => { sessionTracker?.sample(); }, 5000);
+  }
   function flushPersistentState() {
     try { preferencesWriter.flush(); } catch {}
     try { scopeStatusWriter.flush(); } catch {}
@@ -123,6 +142,7 @@ else {
     }
   }
   function publish() {
+    if (sessionTracker) state.session = sessionPresentation(sessionTracker.snapshot());
     state.experience = experienceFromPreferences(preferences);
     state.sizeLevel = preferences.sizeLevel;
     state.skins = [...builtInSkins, ...skins.list()].map(skin => ({ id: skin.id, name: skin.name }));
@@ -1037,6 +1057,7 @@ else {
     });
     // Compile/load the native binding while Chromium loads the renderer.
     startScopeMonitor();
+    if (!smokeTest) startSessionProbe();
     win.on('closed', () => { logLifecycle({ event: 'window-closed', closing }); app.quit(); });
     win.webContents.on('render-process-gone', (_event, details) => {
       if (closing || win.isDestroyed()) return;
@@ -1086,6 +1107,6 @@ else {
     console.error(error); app.exit(1);
   });
   app.on('second-instance', () => { if (win) updateScope(scope); });
-  app.on('before-quit', () => { closing = true; try { cancelSettle({ apply: true }); } catch {} clearInterval(interval); clearInterval(pluginInterval); scopeMonitor?.stop(); try { scopeVisibility?.flush(); } catch {}; flushPersistentState(); });
+  app.on('before-quit', () => { closing = true; try { cancelSettle({ apply: true }); } catch {} clearInterval(interval); clearInterval(pluginInterval); clearInterval(sessionInterval); scopeMonitor?.stop(); try { scopeVisibility?.flush(); } catch {}; flushPersistentState(); });
   app.on('will-quit', flushPersistentState);
 }

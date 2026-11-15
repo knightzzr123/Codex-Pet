@@ -19,6 +19,8 @@ let pauseStarted = null;
 let settingsOpen = false;
 let idleTimer = null;
 let lastIdleAt = Date.now();
+let lastSessionToastId = 0;
+let sessionToastTimer = null;
 const reading = new Set();
 const motionPreference = window.matchMedia('(prefers-reduced-motion: reduce)');
 const MOTION = Object.freeze({
@@ -132,6 +134,45 @@ function countdown(timestamp) {
   if (days) return `${days}天 ${hours}小时后重置`;
   if (hours) return `${hours}小时 ${minutes}分钟后重置`;
   return `${minutes}分 ${seconds % 60}秒后重置`;
+}
+
+function showSessionToast(line) {
+  const toast = $('session-toast');
+  if (!toast) return;
+  clearTimeout(sessionToastTimer);
+  toast.textContent = line || 'Codex 状态有变化。';
+  toast.hidden = false;
+  sessionToastTimer = setTimeout(() => { toast.hidden = true; }, 8000);
+}
+
+function applySessionState() {
+  const session = state.session;
+  const mascot = $('mascot');
+  if (mascot?.dataset) mascot.dataset.session = session?.state || 'idle';
+  const chip = $('session-state');
+  const text = $('session-state-text');
+  if (chip) {
+    if (!session) {
+      chip.hidden = true;
+    } else {
+      chip.hidden = false;
+      if (chip.dataset) chip.dataset.state = session.state;
+      chip.classList.toggle('is-degraded', session.degraded === true);
+      if (text) text.textContent = session.label || '空闲';
+      chip.title = session.title || '';
+      chip.setAttribute?.('aria-label', `Codex 状态：${session.label || '空闲'}`);
+    }
+  }
+  const toast = $('session-toast');
+  if (!toast) return;
+  if (session?.state === 'error' && Number(session.toastId) > lastSessionToastId) {
+    lastSessionToastId = Number(session.toastId);
+    showSessionToast(session.line);
+  } else if (session?.state !== 'error') {
+    clearTimeout(sessionToastTimer);
+    sessionToastTimer = null;
+    toast.hidden = true;
+  }
 }
 
 function applyExperienceStyles() {
@@ -326,6 +367,7 @@ function render() {
   $('refresh').classList.toggle('loading', state.loading);
   $('refresh').ariaBusy = String(state.loading);
   $('refresh').title = state.loading ? '正在刷新额度' : cooldown ? `${cooldown} 秒后可再次刷新` : '刷新额度';
+  applySessionState();
   syncSettingsControls();
 }
 

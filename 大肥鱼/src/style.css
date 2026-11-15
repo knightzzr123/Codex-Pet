@@ -73,6 +73,28 @@ body.face-left .dot-one { left: calc(175px + var(--bubble-offset-x)); transform:
 body.face-left .dot-two { left: calc(149px + var(--bubble-offset-x)); transform: rotate(-12deg); }
 body.face-left #reaction { right: auto; left: 77px; }
 #pet:hover #pet-image { filter: drop-shadow(0 0 5px #8ea9e94d); }
+.session-state {
+  position: absolute; z-index: 8; right: 22px; bottom: 236px;
+  display: flex; align-items: center; gap: 6px; max-width: 150px;
+  padding: 4px 9px; border: 2px solid #273976; border-radius: 999px;
+  background: #fffefcdd; color: #30447e; font-size: 11px; line-height: 14px;
+  font-weight: 800; pointer-events: none;
+  transition: opacity var(--motion-micro) var(--motion-ease), transform var(--motion-micro) var(--motion-ease);
+}
+.session-state[hidden], .session-toast[hidden] { display: none; }
+.session-state.is-degraded { opacity: .72; }
+.session-dot { flex: 0 0 7px; width: 7px; height: 7px; border-radius: 100%; background: #93a1c0; }
+.session-state[data-state="busy"] .session-dot { background: #d99854; animation: session-pulse 1.4s ease-in-out infinite; }
+.session-state[data-state="error"] .session-dot { background: #d76666; }
+.session-toast {
+  position: absolute; z-index: 9; right: 24px; bottom: 266px; max-width: 230px;
+  padding: 8px 12px; border: 3px solid #273976; border-radius: 16px;
+  background: #fffefc; color: #30447e; font-size: 12px; line-height: 17px;
+  font-weight: 700; pointer-events: none; box-shadow: 0 5px 0 #52629b18;
+}
+body.face-left .session-state { right: auto; left: 22px; }
+body.face-left .session-toast { right: auto; left: 24px; }
+@keyframes session-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
 #reaction { position: absolute; z-index: 6; bottom: 192px; right: 77px; font-size: 30px; font-weight: 800; color: #ee95bd; opacity: 0; pointer-events: none; }
 body.no-bubble #bubble { opacity: 0; visibility: hidden; pointer-events: none; transform: translateY(8px) scale(.96); transition: opacity var(--motion-micro) var(--motion-ease), transform var(--motion-panel) var(--motion-ease), visibility 0s var(--motion-micro); }
 body.no-bubble .thought-dot { opacity: 0; visibility: hidden; transition-delay: 0s, var(--motion-micro); }
@@ -125,9 +147,11 @@ body.reduced-motion #mascot, body.reduced-motion .settings-panel { transition: n
 body.reduced-motion.pressing #pet-image { transform: none; }
 body.reduced-motion.pressing #speech-anchor { transform: none; }
 body.reduced-motion #refresh { animation: none; }
+body.reduced-motion .session-state[data-state="busy"] .session-dot { animation: none; }
 @media (prefers-reduced-motion: reduce) {
   #bubble, .bubble-panel, .thought-dot, #pet, #pet-image, #speech-anchor, #mascot, .settings-panel { transition: none !important; }
   body.pressing #pet-image { transform: none; }
   body.pressing #speech-anchor { transform: none; }
   #refresh { animation: none; }
+  .session-state[data-state="busy"] .session-dot { animation: none; }
 }
