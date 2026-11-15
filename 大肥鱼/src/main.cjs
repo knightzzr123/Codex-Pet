@@ -399,19 +399,20 @@ else {
       return false;
     } finally { deletingSkin = false; }
   }
-  async function chooseSkinImage() {
+  async function chooseSkinImage(event) {
     if (importingSkin || deletingSkin || editingDialogues) return;
     importingSkin = true;
     cancelDrag();
+    const parent = dialogOwner(event) || getSettingsWindow() || win;
     try {
-      const result = await dialog.showOpenDialog(win, {
+      const result = await dialog.showOpenDialog(parent, {
         title: '导入角色图片', buttonLabel: '调整这张图片', properties: ['openFile'],
         filters: [{ name: '图片皮肤', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'] }]
       });
       if (!result.canceled && result.filePaths[0]) {
         const source = readImageFile(result.filePaths[0]);
         await validateSkinImage(source.bytes, source.mime);
-        const edited = await openSkinEditor(win, source);
+        const edited = await openSkinEditor(parent, source);
         if (edited) {
           const skin = await skins.importBytes(edited.bytes, edited.name, validateSkinImage);
           setSkin(skin.id);
@@ -1464,7 +1465,7 @@ else {
     });
     ipcMain.on('pet:size-level', (_event, level) => setSizeLevel(Number(level)));
     ipcMain.on('pet:set-skin', (_event, id) => setSkin(id));
-    ipcMain.on('pet:import-skin', () => { chooseSkinImage(); });
+    ipcMain.on('pet:import-skin', event => { chooseSkinImage(event); });
     ipcMain.on('pet:import-skin-pack', () => { openSettingsPanel('appearance'); });
     ipcMain.on('pet:delete-skin-pack', (_event, id) => { deleteImportedPack(id); });
     ipcMain.on('pet:edit-dialogues', () => { openSettingsPanel('dialogue'); });

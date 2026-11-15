@@ -36,7 +36,29 @@
           <h3 class="settings-kicker-title">皮肤</h3>
           <div id="settings-skins" class="settings-skin-grid" role="radiogroup" aria-label="角色皮肤"></div>
           <p class="settings-hint">高对比主题下预览图可能保持原色。</p>
-          <button type="button" id="settings-delete-skin" class="settings-action settings-link">删除当前已导入的皮肤</button>
+          <button type="button" id="settings-delete-skin" class="settings-action settings-link" hidden>删除当前已导入的皮肤</button>
+          <h3 class="settings-kicker-title">透明度</h3>
+          <div class="settings-field">
+            <span class="settings-label">透明度
+              <button type="button" class="settings-reset" data-reset-key="opacity" aria-label="重置透明度" title="恢复默认透明度">↺</button>
+            </span>
+            <span id="settings-opacity-value" class="settings-value">100%</span>
+            <input id="settings-opacity" type="range" min="0.35" max="1" step="0.05" value="1" aria-label="角色透明度">
+          </div>
+          <h3 class="settings-kicker-title">大小</h3>
+          <div class="settings-field settings-field-plain">
+            <span class="settings-label">大小
+              <button type="button" class="settings-reset" data-reset-key="sizeLevel" aria-label="重置大小">↺</button>
+            </span>
+            <span id="settings-size-value" class="settings-value">4 档</span>
+          </div>
+          <div id="settings-size" class="settings-size" role="radiogroup" aria-label="角色大小"></div>
+          <h3 class="settings-kicker-title">窗口外观</h3>
+          <div id="settings-color-scheme" class="settings-chips" role="radiogroup" aria-label="窗口外观">
+            <button type="button" class="settings-chip" role="radio" data-color-scheme="system" aria-checked="true">跟随系统</button>
+            <button type="button" class="settings-chip" role="radio" data-color-scheme="light" aria-checked="false">浅色</button>
+            <button type="button" class="settings-chip" role="radio" data-color-scheme="dark" aria-checked="false">深色</button>
+          </div>
           <h3 class="settings-kicker-title">导入</h3>
           <div id="settings-zip-drop" class="settings-drop" data-state="idle" tabindex="0" role="button" aria-label="将 .zip 或皮肤包文件夹拖到此处">
             <strong id="settings-drop-title">将 .zip 或皮肤包文件夹拖到此处</strong>
@@ -55,28 +77,6 @@
               <button type="button" id="settings-zip-cancel" class="settings-action">取消</button>
             </div>
           </section>
-          <h3 class="settings-kicker-title">透明度</h3>
-          <div class="settings-field">
-            <span class="settings-label">透明度
-              <button type="button" class="settings-reset" data-reset-key="opacity" aria-label="重置透明度" title="恢复默认透明度">↺</button>
-            </span>
-            <span id="settings-opacity-value" class="settings-value">100%</span>
-            <input id="settings-opacity" type="range" min="0.35" max="1" step="0.05" value="1" aria-label="角色透明度">
-          </div>
-          <h3 class="settings-kicker-title">窗口外观</h3>
-          <div id="settings-color-scheme" class="settings-chips" role="radiogroup" aria-label="窗口外观">
-            <button type="button" class="settings-chip" role="radio" data-color-scheme="system" aria-checked="true">跟随系统</button>
-            <button type="button" class="settings-chip" role="radio" data-color-scheme="light" aria-checked="false">浅色</button>
-            <button type="button" class="settings-chip" role="radio" data-color-scheme="dark" aria-checked="false">深色</button>
-          </div>
-          <h3 class="settings-kicker-title">大小</h3>
-          <div class="settings-field settings-field-plain">
-            <span class="settings-label">大小
-              <button type="button" class="settings-reset" data-reset-key="sizeLevel" aria-label="重置大小">↺</button>
-            </span>
-            <span id="settings-size-value" class="settings-value">4 档</span>
-          </div>
-          <div id="settings-size" class="settings-size" role="radiogroup" aria-label="角色大小"></div>
         </section>
 
         <section class="settings-panel-page" role="tabpanel" id="panel-dialogue" aria-labelledby="tab-dialogue" data-settings-group="dialogue" hidden>

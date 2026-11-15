@@ -178,7 +178,7 @@ function createSkinPackSession(options = {}) {
       record.preview = publicPreview(library.previewFromIdentified(identified));
       return { ok: true, ...record.preview };
     } catch (error) {
-      if (record.ownsDir) drop(record.token);
+      drop(record.token);
       const code = typeof error.code === 'string' && (error.code.startsWith('ZIP_') || error.code === 'PACK_CHANGED')
         ? error.code : 'ZIP_FORMAT';
       return fail(code, error.message);
@@ -192,8 +192,14 @@ function createSkinPackSession(options = {}) {
     if (!record.preview || !record.dir || !record.id) return fail('TOKEN_INVALID', '请先预览这个皮肤包，再确认导入。');
     let again;
     try { again = library.identifyDirectory(record.dir); }
-    catch { return fail('PACK_CHANGED'); }
-    if (again.id !== record.id) return fail('PACK_CHANGED');
+    catch {
+      drop(token);
+      return fail('PACK_CHANGED');
+    }
+    if (again.id !== record.id) {
+      drop(token);
+      return fail('PACK_CHANGED');
+    }
     if (record.needsConfirm && payload.acceptSameName !== true) return fail('PACK_CONFIRM');
     try {
       const pack = await library.importDirectory(record.dir, validateImage);

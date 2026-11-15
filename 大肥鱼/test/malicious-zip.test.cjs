@@ -24,6 +24,12 @@ test('21 个恶意或边界 ZIP 在运行时生成，不把二进制夹具写进
     const libraryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dafeiyu-malicious-lib-'));
     const library = new SkinPackLibrary(libraryRoot);
     const acceptedRead = new Set(['CTRL', 'Z4-BAD-MANIFEST', 'B2-DEEP-JSON']);
+    const expectedCode = {
+      'B3-BAD-CRC': 'ZIP_CRC',
+      'B4-NAME-MISMATCH': 'ZIP_PATH',
+      'B4-SIZE-MISMATCH': 'ZIP_PATH',
+      'Z3-BOMB': 'ZIP_LIMIT'
+    };
     for (const item of catalog) {
       const buffer = fs.readFileSync(path.join(dir, item.file));
       let readError = null;
@@ -31,6 +37,7 @@ test('21 个恶意或边界 ZIP 在运行时生成，不把二进制夹具写进
       catch (error) { readError = error; }
       if (acceptedRead.has(item.id)) assert.equal(readError, null, item.id);
       else assert.ok(readError, `${item.id} 应该在读取时拒绝`);
+      if (expectedCode[item.id]) assert.equal(readError.code, expectedCode[item.id], `${item.id} ${readError && readError.message}`);
     }
     const good = fs.readFileSync(path.join(dir, '00-valid-pack.zip'));
     fs.writeFileSync(path.join(libraryRoot, 'good.zip'), good);

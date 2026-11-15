@@ -203,9 +203,35 @@ test('preview 后目录被篡改', async t => {
   const changed = await session.commit(registered.token, 3);
   assert.equal(changed.ok, false);
   assert.equal(changed.code, 'PACK_CHANGED');
+  assert.match(changed.error, /重新选择/);
   const again = await session.preview(registered.token, 3);
-  assert.equal(again.ok, true);
-  assert.equal(again.name, preview.name);
+  assert.equal(again.ok, false);
+  assert.equal(again.code, 'TOKEN_INVALID');
+});
+
+test('预览失败会作废 token 并清理临时目录', async t => {
+  const root = temporary(t);
+  const { library, session } = sessionFor(root);
+  const bad = path.join(root, 'broken.zip');
+  const manifest = Buffer.from(JSON.stringify({
+    manifestVersion: 1, name: '坏图', version: '1.0.0',
+    characters: [{ id: 'whale', name: '鲸鱼', image: 'role.png' }]
+  }));
+  fs.writeFileSync(bad, buildZip([
+    { name: 'manifest.json', data: manifest },
+    { name: 'role.png', data: Buffer.from('not-a-png') }
+  ]));
+  const registered = session.register(bad, 4);
+  assert.equal(registered.ok, true);
+  const preview = await session.preview(registered.token, 4);
+  assert.equal(preview.ok, false);
+  assert.deepEqual(unzipNames(library), []);
+  const again = await session.preview(registered.token, 4);
+  assert.equal(again.code, 'TOKEN_INVALID');
+  const kept = [];
+  for (let index = 0; index < 4; index += 1) kept.push(session.register(writePack(root, 30 + index, `留${index}`), 4));
+  assert.equal(kept.every(item => item.ok), true);
+  assert.equal((await session.preview(kept[0].token, 4)).ok, true);
 });
 
 test('关窗后临时目录被清理', async t => {

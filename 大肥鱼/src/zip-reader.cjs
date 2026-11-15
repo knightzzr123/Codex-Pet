@@ -137,9 +137,20 @@ function isDirectoryEntry(externalAttributes, directoryName) {
   return ((externalAttributes >>> 16) & 0o170000) === 0o040000;
 }
 
+const IGNORED_EXTENSIONS = new Set(['txt', 'md']);
+const IGNORED_BARE_NAMES = new Set(['license', 'licence', 'readme']);
+
 function isIgnoredEntry(entry) {
-  const base = entry.parts[entry.parts.length - 1];
-  return entry.parts[0] === '__MACOSX' || base === '.DS_Store' || base === 'Thumbs.db';
+  const parts = entry.parts || [];
+  if (parts[0] === '__MACOSX') return true;
+  const base = String(parts[parts.length - 1] || '');
+  const lower = base.toLowerCase();
+  if (lower === '.ds_store' || lower === 'thumbs.db') return true;
+  const dot = lower.lastIndexOf('.');
+  const ext = dot > 0 ? lower.slice(dot + 1) : '';
+  if (IGNORED_EXTENSIONS.has(ext)) return true;
+  if (!ext && IGNORED_BARE_NAMES.has(lower)) return true;
+  return false;
 }
 
 function assertAllowedExtension(safe) {
@@ -158,6 +169,7 @@ function parseCentralDirectory(buffer, limits) {
   if (entries > limits.maxEntries) throw new ZipError(`压缩包条目超过 ${limits.maxEntries} 个，已拒绝。`, 'ZIP_LIMIT');
   const parsed = [];
   const folded = new Set();
+  let skipped = 0;
   let cursor = cdOffset;
   const end = cdOffset + cdSize;
   while (cursor + 46 <= end) {
@@ -186,11 +198,12 @@ function parseCentralDirectory(buffer, limits) {
     const decoded = unicodePathName(extra, nameBytes) || decodeEntryName(nameBytes, flags);
     const safe = safeEntryName(decoded);
     if (isIgnoredEntry({ parts: safe.parts })) {
+      skipped += 1;
       cursor = nameStart + nameLength + extraLength + commentLength;
       continue;
     }
     if (safe.parts.length > 2) {
-      throw new ZipError('manifest.json 只能位于压缩包根目录或唯一一层顶层目录。', 'ZIP_MANIFEST_LOCATION');
+      throw new ZipError('皮肤包里的文件只能放在根目录，或唯一一层顶层目录下。manifest.json 也只能在这两个位置。', 'ZIP_MANIFEST_LOCATION');
     }
     assertAllowedExtension(safe);
     const fold = safe.name.toLowerCase();
@@ -203,7 +216,7 @@ function parseCentralDirectory(buffer, limits) {
     if (parsed.length > limits.maxEntries) throw new ZipError(`压缩包条目超过 ${limits.maxEntries} 个，已拒绝。`, 'ZIP_LIMIT');
     cursor = nameStart + nameLength + extraLength + commentLength;
   }
-  if (entries !== 0 && parsed.length < entries) throw new ZipError('压缩包目录损坏。', 'ZIP_FORMAT');
+  if (entries !== 0 && parsed.length + skipped < entries) throw new ZipError('压缩包目录损坏。', 'ZIP_FORMAT');
   return parsed;
 }
 
@@ -214,7 +227,7 @@ function locatePackManifest(entries) {
   }
   const prefix = manifests[0].parts.slice(0, -1);
   if (prefix.length > 1) {
-    throw new ZipError('manifest.json 只能位于压缩包根目录或唯一一层顶层目录。', 'ZIP_MANIFEST_LOCATION');
+    throw new ZipError('皮肤包里的文件只能放在根目录，或唯一一层顶层目录下。manifest.json 也只能在这两个位置。', 'ZIP_MANIFEST_LOCATION');
   }
   return { entry: manifests[0], prefix };
 }

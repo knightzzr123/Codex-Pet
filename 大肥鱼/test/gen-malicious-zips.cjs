@@ -192,30 +192,24 @@ writeFixture('B2-DEEP-JSON', '13-deep-json-manifest.zip', buildZip([
   { name: 'role.png', data: image }
 ]), 'manifest.json 为 2500 层嵌套 JSON（探测解析深度限制）');
 
-const good = Buffer.from('hello-crc');
 writeFixture('B3-BAD-CRC', '14-bad-crc32.zip', buildZip([
   { name: 'manifest.json', data: manifest },
-  { name: 'role.png', data: image },
-  { name: 'note.txt', data: good, crc: 0xdeadbeef, localCrc: 0xdeadbeef, centralCrc: 0xdeadbeef }
-]), '条目 CRC32 故意写成 0xDEADBEEF，内容本身可解压');
+  { name: 'role.png', data: image, crc: 0xdeadbeef, localCrc: 0xdeadbeef, centralCrc: 0xdeadbeef }
+]), 'PNG 条目 CRC32 故意写成 0xDEADBEEF，内容本身可解压');
 
 writeFixture('B4-NAME-MISMATCH', '15-local-central-name-mismatch.zip', buildZip([
-  { name: 'safe/note.txt', localName: 'safe/note.txt', centralName: 'other/secret.txt', data: Buffer.from('mismatch-name') },
-  { name: 'manifest.json', data: manifest },
-  { name: 'role.png', data: image }
+  { name: 'role.png', localName: 'role.png', centralName: 'other.png', data: image },
+  { name: 'manifest.json', data: manifest }
 ]), '本地头文件名与中央目录文件名不一致');
 
 writeFixture('B4-SIZE-MISMATCH', '16-local-central-size-mismatch.zip', buildZip([
   {
-    name: 'note.txt',
-    data: Buffer.from('size-mismatch-payload'),
+    name: 'role.png',
+    data: image,
     localUncompressedSize: 3,
-    centralUncompressedSize: 999,
-    localCompressedSize: undefined,
-    centralCompressedSize: undefined
+    centralUncompressedSize: image.length
   },
-  { name: 'manifest.json', data: manifest },
-  { name: 'role.png', data: image }
+  { name: 'manifest.json', data: manifest }
 ]), '本地头与中央目录声明的未压缩大小不一致');
 
 writeFixture('B4-EMPTY-SEGMENTS', '17-empty-segments.zip', buildZip([
@@ -225,8 +219,8 @@ writeFixture('B4-EMPTY-SEGMENTS', '17-empty-segments.zip', buildZip([
 
 const bombRaw = Buffer.alloc(300 * 1024, 0);
 writeFixture('Z3-BOMB', '18-zip-bomb-ratio.zip', buildZip([
-  { name: 'bomb.bin', method: 8, data: bombRaw, uncompressedSize: 10 }
-]), 'deflate 压缩炸弹（约 300 KiB 零字节，头里声明未压缩大小为 10）');
+  { name: 'bomb.png', method: 8, data: bombRaw }
+]), 'deflate 压缩炸弹（约 300 KiB 零字节的 PNG 条目，压缩比超过 100:1）');
 
 writeFixture('Z2-EXTRA-EXE', '19-nonwhitelist-exe.zip', buildZip([
   { name: 'manifest.json', data: manifest },

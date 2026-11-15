@@ -93,6 +93,31 @@ test('设置窗口打开后聚焦当前分类，Esc 请求关闭，Tab 在窗口
   assert.equal(f.api.closed, true);
 });
 
+test('Tab 不进入隐藏面板，方向键在 radiogroup 内移动', () => {
+  const f = fixture();
+  const visible = f.get('settings-import-zip');
+  const hiddenPanel = f.get('panel-dialogue');
+  hiddenPanel.hidden = true;
+  const hidden = f.get('settings-bubble-x');
+  hidden.parentElement = hiddenPanel;
+  f.get('settings-panel').focusables = [visible, hidden];
+  visible.focus();
+  f.get('settings-panel').emit('keydown', { key: 'Tab', shiftKey: false });
+  assert.equal(f.doc.activeElement, visible);
+  assert.equal(hidden.focused, false);
+  const radios = ['a', 'b', 'c'].map(id => {
+    const button = f.get(`radio-${id}`);
+    button.setAttribute('role', 'radio');
+    return button;
+  });
+  f.get('settings-skins').focusables = radios;
+  radios[0].focus();
+  f.get('settings-skins').emit('keydown', { key: 'ArrowRight' });
+  assert.equal(f.doc.activeElement, radios[1]);
+  f.get('settings-skins').emit('keydown', { key: 'ArrowLeft' });
+  assert.equal(f.doc.activeElement, radios[0]);
+});
+
 test('方向键在六个分类之间移动', () => {
   const f = fixture();
   const ids = ['appearance', 'dialogue', 'behavior', 'accessibility', 'preferences', 'about'];

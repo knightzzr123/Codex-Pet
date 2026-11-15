@@ -107,6 +107,8 @@ function syncSettingsControls() {
     button.classList.toggle('is-active', active);
     button.setAttribute('aria-checked', String(active));
   }
+  const deleteSkin = $('settings-delete-skin');
+  if (deleteSkin) deleteSkin.hidden = state.skin?.kind !== 'image' && state.skin?.kind !== 'pack';
   const version = $('settings-version');
   if (version && state.version) version.textContent = `内部版本 ${state.version}`;
   const display = $('settings-display-version');
@@ -287,6 +289,12 @@ async function submitZip() {
       token: pendingToken,
       acceptSameName: currentPreview?.needsConfirm === true
     });
+    if (result?.code === 'PACK_CHANGED') {
+      clearPreview();
+      setDropState('error', result.error || '皮肤包在预览之后被改过，请重新选择。');
+      liveAssert(result.error || '皮肤包在预览之后被改过，请重新选择。');
+      return;
+    }
     if (result?.code === 'PACK_CONFIRM') {
       showPreview({
         ...(currentPreview || {}),

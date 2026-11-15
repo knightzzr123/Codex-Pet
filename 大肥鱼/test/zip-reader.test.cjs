@@ -166,6 +166,29 @@ test('解压写入临时目录时再次挡住越界路径和符号链接', async
   assert.equal(fs.existsSync(path.join(root, 'evil.txt')), false);
 });
 
+test('txt、md 和无扩展名的 LICENSE/README 静默忽略，其它扩展名仍拒绝', async () => {
+  const files = await readZipBuffer(buildZip([
+    { name: 'role.png', data: Buffer.from('png') },
+    { name: 'note.txt', data: Buffer.from('notes') },
+    { name: 'guide.md', data: Buffer.from('# hi') },
+    { name: 'LICENSE', data: Buffer.from('mit') },
+    { name: 'LICENCE', data: Buffer.from('mit') },
+    { name: 'README', data: Buffer.from('read') }
+  ]));
+  assert.deepEqual(files.map(file => file.name), ['role.png']);
+  await assert.rejects(() => readZipBuffer(buildZip([
+    { name: 'role.png', data: Buffer.from('png') },
+    { name: 'payload.exe', data: Buffer.from('MZ') }
+  ])), error => error.code === 'ZIP_EXTENSION');
+});
+
+test('三层路径被拒绝，并说明 manifest 只能在根目录或一层顶层目录', async () => {
+  await assert.rejects(() => readZipBuffer(buildZip([
+    { name: 'pack/img/role.png', data: Buffer.from('png') }
+  ])), error => error.code === 'ZIP_MANIFEST_LOCATION'
+    && /根目录/.test(error.message) && /一层/.test(error.message) && /manifest\.json/.test(error.message));
+});
+
 test('PNG 条目 CRC 错误、本地头名称不一致都会拒绝', async () => {
   await assert.rejects(() => readZipBuffer(buildZip([
     { name: 'role.png', data: Buffer.from('png-bytes'), crc: 0xdeadbeef }
