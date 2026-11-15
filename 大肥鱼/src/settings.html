@@ -209,6 +209,11 @@
     </div>
     <p id="settings-live" class="settings-live" role="status" aria-live="polite" aria-atomic="true"></p>
     <p id="settings-live-assertive" class="settings-live" role="alert" aria-live="assertive"></p>
+    <div id="settings-notice" class="settings-notice" role="status" aria-live="polite" aria-atomic="true" hidden>
+      <p id="settings-notice-text"></p>
+      <button type="button" id="settings-notice-action" class="settings-action settings-primary" hidden>切换到它</button>
+      <button type="button" id="settings-notice-close" class="settings-link" aria-label="关闭提示">关闭</button>
+    </div>
   </div>
   <script src="dialogue-data.js"></script>
   <script type="module" src="dialogue-editor.js"></script>

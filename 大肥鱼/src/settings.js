@@ -139,22 +139,28 @@ function showPreview(preview) {
   const box = $('settings-zip-preview');
   if (!box) return;
   box.hidden = false;
+  const finalName = preview?.installedName || preview?.name || '';
   const title = $('settings-zip-preview-title');
   if (title) title.textContent = preview?.name ? `导入预览 · ${preview.name}` : '导入预览';
   const summary = $('settings-zip-preview-summary');
   const count = preview?.characters?.length || 0;
   const sizeText = formatBytes(preview?.totalBytes || 0);
-  if (summary) summary.textContent = `${preview?.name || '皮肤包'} · ${count} 个角色${preview?.version ? ` · ${preview.version}` : ''} · ${sizeText}`;
+  if (summary) summary.textContent = `${finalName || '皮肤包'} · ${count} 个角色${preview?.version ? ` · ${preview.version}` : ''} · ${sizeText}`;
   const warning = $('settings-zip-preview-warning');
   const duplicate = preview?.duplicate;
+  const reused = preview?.reused === true;
   if (warning) {
     warning.hidden = !duplicate;
-    if (duplicate?.kind === 'content') warning.textContent = `已有同名内容「${duplicate.existingName || preview.name}」。确认后使用已有文件，不会复制第二份。`;
-    else if (duplicate) warning.textContent = `已有同名皮肤包「${duplicate.existingName}」。导入将作为新包保留，旧包不会被覆盖。`;
-    else warning.textContent = '';
+    if (reused) {
+      warning.textContent = `这个皮肤包已经导入过（「${duplicate.existingName || preview.name}」）。不会再导入一份，可以切换到它。`;
+    } else if (duplicate?.kind === 'sourceId') {
+      warning.textContent = `已有同 ID 的旧版本「${duplicate.existingName}」。将另存为「${finalName}」，旧版本保留。`;
+    } else if (duplicate?.kind === 'name') {
+      warning.textContent = `已有同名皮肤包「${duplicate.existingName}」。将另存为「${finalName}」，旧包不会被覆盖。`;
+    } else warning.textContent = '';
   }
   const confirm = $('settings-zip-confirm');
-  if (confirm) confirm.textContent = preview?.needsConfirm ? '确认并导入' : '导入';
+  if (confirm) confirm.textContent = reused ? '切换到它' : '导入';
   const list = $('settings-zip-preview-characters');
   if (list && typeof list.replaceChildren === 'function' && typeof document.createElement === 'function') {
     list.replaceChildren(...(preview?.characters || []).slice(0, 12).map(character => {
@@ -196,6 +202,44 @@ function formatBytes(bytes) {
 
 function live(message) { const node = $('settings-live'); if (node) node.textContent = message || ''; }
 function liveAssert(message) { const node = $('settings-live-assertive'); if (node) node.textContent = message || ''; }
+
+let noticeTimer = null;
+let noticeAction = null;
+
+function hideNotice() {
+  if (noticeTimer && typeof clearTimeout === 'function') clearTimeout(noticeTimer);
+  noticeTimer = null;
+  noticeAction = null;
+  const box = $('settings-notice');
+  if (box) box.hidden = true;
+  const text = $('settings-notice-text');
+  if (text) text.textContent = '';
+  const button = $('settings-notice-action');
+  if (button) { button.hidden = true; button.textContent = ''; }
+}
+
+// A non-blocking toast. An action keeps it open until the user dismisses it or
+// follows it; purely informational notices disappear on their own.
+function showNotice(message, action = null) {
+  const box = $('settings-notice');
+  if (!box) return;
+  const text = $('settings-notice-text');
+  if (text) text.textContent = message || '';
+  const button = $('settings-notice-action');
+  noticeAction = typeof action?.run === 'function' ? action.run : null;
+  if (button) {
+    button.hidden = !noticeAction;
+    button.textContent = noticeAction ? (action.label || '切换到它') : '';
+  }
+  box.hidden = false;
+  if (noticeTimer && typeof clearTimeout === 'function') clearTimeout(noticeTimer);
+  noticeTimer = null;
+  if (!noticeAction && typeof setTimeout === 'function') {
+    noticeTimer = setTimeout(() => { noticeTimer = null; hideNotice(); }, 8000);
+    // Do not keep a smoke-test event loop alive just for the toast timer.
+    if (noticeTimer && typeof noticeTimer.unref === 'function') noticeTimer.unref();
+  }
+}
 
 function setDropState(state, detail) {
   const drop = $('settings-zip-drop');
@@ -280,40 +324,76 @@ async function choosePack(mode) {
 }
 
 let importingZip = false;
+
+function switchToPack(switchTo, name) {
+  if (switchTo) window.settingsAPI?.setSkin?.(switchTo);
+  const message = name ? `已切换到「${name}」。` : '已切换到这个皮肤包。';
+  setStatus(message);
+  live(message);
+}
+
 async function submitZip() {
   if (importingZip || !pendingToken || !window.settingsAPI?.commitSkinPack) return;
+  if (currentPreview?.reused) {
+    // Identical content is already installed: never write a second copy. The
+    // preview's primary action is "switch to it" instead of an import.
+    const switchTo = currentPreview.switchTo || currentPreview.duplicate?.switchTo || '';
+    const existingName = currentPreview.duplicate?.existingName || currentPreview.name || '';
+    if (pendingToken) await window.settingsAPI?.cancelSkinPack?.(pendingToken);
+    clearPreview();
+    if (switchTo) {
+      switchToPack(switchTo, existingName);
+      setDropState('success', `这个皮肤包已经导入过，已切换到「${existingName}」。`);
+      liveAssert(`这个皮肤包已经导入过。已切换到「${existingName}」。`);
+      return;
+    }
+    setDropState('success', '这个皮肤包已经导入过，没有重复导入。');
+    showNotice('这个皮肤包已经导入过。');
+    liveAssert('这个皮肤包已经导入过。');
+    return;
+  }
   importingZip = true;
   setDropState('busy');
   try {
-    const result = await window.settingsAPI.commitSkinPack({
-      token: pendingToken,
-      acceptSameName: currentPreview?.needsConfirm === true
-    });
+    const result = await window.settingsAPI.commitSkinPack({ token: pendingToken });
     if (result?.code === 'PACK_CHANGED') {
       clearPreview();
       setDropState('error', result.error || '皮肤包在预览之后被改过，请重新选择。');
       liveAssert(result.error || '皮肤包在预览之后被改过，请重新选择。');
       return;
     }
-    if (result?.code === 'PACK_CONFIRM') {
-      showPreview({
-        ...(currentPreview || {}),
-        needsConfirm: true,
-        duplicate: { kind: 'content', existingName: currentPreview?.duplicate?.existingName || currentPreview?.name || '这个皮肤包' }
-      });
-      setDropState('preview');
-      liveAssert(result.error || '已有同名皮肤包。确认后才会继续。');
-      return;
-    }
     if (!result?.ok) {
       rejectPack(result);
       return;
     }
-    const done = result.pack?.name ? `已导入皮肤包「${result.pack.name}」。` : '皮肤包已导入。';
+    const name = result.pack?.name || '';
+    if (result.reused) {
+      const switchTo = result.switchTo || '';
+      const done = '这个皮肤包已经导入过，没有重复导入。';
+      setStatus(done);
+      live(done);
+      clearPreview();
+      setDropState('success', done);
+      showNotice('这个皮肤包已经导入过。', switchTo ? {
+        label: '切换到它',
+        run: () => {
+          switchToPack(switchTo, name);
+          setStatus(`已切换到「${name}」。`);
+        }
+      } : null);
+      return;
+    }
+    const done = name ? `已导入皮肤包「${name}」。` : '皮肤包已导入。';
     setStatus(done);
     live(done);
     clearPreview();
     setDropState('success', done);
+    if (result.renamed) {
+      // Z-5: a different version of the same pack is kept as a new skin; the
+      // old version stays installed and nothing is interrupted by a modal.
+      showNotice('已作为新皮肤导入，旧版本保留。');
+      liveAssert(`已作为新皮肤导入「${name}」，旧版本保留。`);
+    }
   } finally {
     importingZip = false;
   }
@@ -321,6 +401,12 @@ async function submitZip() {
 
 function bindStaticControls() {
   $('settings-close')?.addEventListener('click', () => { beginClose(); });
+  $('settings-notice-action')?.addEventListener('click', () => {
+    const action = noticeAction;
+    hideNotice();
+    try { action?.(); } catch { /* a failed switch must not keep the toast open */ }
+  });
+  $('settings-notice-close')?.addEventListener('click', () => hideNotice());
   $('settings-panel')?.addEventListener('keydown', event => {
     if (event.key !== 'Tab') return;
     const panel = $('settings-panel');
@@ -539,5 +625,8 @@ function boot() {
 boot();
 
 if (typeof window !== 'undefined') {
-  window.__settingsTest = { selectCategory, showPreview, clearPreview, applyState, focusClose };
+  window.__settingsTest = {
+    selectCategory, showPreview, clearPreview, applyState, focusClose,
+    previewToken, showNotice, hideNotice, submitZip, switchToPack
+  };
 }

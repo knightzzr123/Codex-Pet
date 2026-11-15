@@ -24,7 +24,7 @@ function fixture() {
     constructor(id) {
       this.id = id; this.handlers = new Map(); this.classList = { add() {}, remove() {}, toggle() {} };
       this.textContent = ''; this.hidden = false; this.focused = false; this.focusables = [];
-      this.attrs = new Map(); this.children = [];
+      this.dataset = {}; this.attrs = new Map(); this.children = [];
     }
     addEventListener(name, handler) { this.handlers.set(name, handler); }
     emit(name, extra = {}) {
@@ -47,16 +47,26 @@ function fixture() {
     if (selector.startsWith('button')) return get('settings-panel').focusables;
     return [];
   }
-  const api = { closed: false, close() { this.closed = true; }, imported: null, previewed: null };
+  const api = {
+    closed: false,
+    close() { this.closed = true; },
+    setSkin(id) { this.skinId = id; },
+    cancelSkinPack(token) { this.canceled = token; return Promise.resolve({ ok: true }); },
+    commitSkinPack(payload) { this.committed = payload; return Promise.resolve(this.commitResult); },
+    imported: null, previewed: null
+  };
   const window = {
     settingsAPI: api,
     addEventListener: (name, fn) => listeners.set(name, fn),
     location: { search: '' }
   };
-  const context = vm.createContext({ window, document: doc, URLSearchParams, globalThis: { location: window.location } });
+  const context = vm.createContext({
+    window, document: doc, URLSearchParams, setTimeout, clearTimeout,
+    globalThis: { location: window.location }
+  });
   vm.runInContext(source, context);
   return {
-    get, api, doc,
+    get, api, doc, window,
     emitWindow: (name, extra = {}) => listeners.get(name)?.({ preventDefault() {}, ...extra })
   };
 }
@@ -194,4 +204,85 @@ test('HTML 有六个分类、读屏名称、拖拽区和导入前预览', () => 
   assert.match(source, /aria-checked/);
   assert.match(source, /aria-pressed/);
   assert.match(source, /aria-label', `\$\{active \? '当前角色' : '切换到'\}/);
+});
+
+test('已导入过的皮肤包提示「已经导入过」，只给「切换到它」而不重复导入', async () => {
+  const f = fixture();
+  const switchTo = `pack:${'a'.repeat(64)}:whale`;
+  f.api.previewSkinPack = async () => ({
+    ok: true, name: 'QA包装', installedName: 'QA包装', version: '1.0.0', sourceId: 'qa-pack',
+    reused: true, switchTo, duplicate: { kind: 'content', existingName: 'QA包装', switchTo },
+    totalBytes: 0, characterCount: 1, characters: []
+  });
+  const token = 'b'.repeat(32);
+  await f.window.__settingsTest.previewToken(token);
+  const warning = f.get('settings-zip-preview-warning');
+  assert.equal(warning.hidden, false);
+  assert.match(warning.textContent, /这个皮肤包已经导入过/);
+  assert.equal(f.get('settings-zip-confirm').textContent, '切换到它');
+
+  await f.window.__settingsTest.submitZip();
+  assert.equal(f.api.canceled, token);
+  assert.equal(f.api.skinId, switchTo);
+  assert.equal(f.api.committed, undefined, 'identical content must not be committed again');
+  assert.equal(f.get('settings-zip-preview').hidden, true);
+});
+
+test('同 ID 或同名的不同内容提示另存为（2），成功后给非打断提示', async () => {
+  const f = fixture();
+  f.api.previewSkinPack = async () => ({
+    ok: true, name: 'QA包装', installedName: 'QA包装（2）', version: '1.0.0', sourceId: 'qa-pack',
+    reused: false, switchTo: '',
+    duplicate: { kind: 'sourceId', existingName: 'QA包装', existingId: 'old', switchTo: '' },
+    totalBytes: 0, characterCount: 1, characters: []
+  });
+  const token = 'c'.repeat(32);
+  await f.window.__settingsTest.previewToken(token);
+  const warning = f.get('settings-zip-preview-warning');
+  assert.match(warning.textContent, /QA包装（2）/);
+  assert.match(warning.textContent, /旧版本保留/);
+  assert.equal(f.get('settings-zip-confirm').textContent, '导入');
+
+  f.api.commitResult = {
+    ok: true, reused: false, renamed: true, switchTo: '',
+    pack: { id: 'd'.repeat(64), name: 'QA包装（2）', characterCount: 1 }
+  };
+  await f.window.__settingsTest.submitZip();
+  assert.equal(f.api.committed.token, token);
+  const notice = f.get('settings-notice');
+  assert.equal(notice.hidden, false);
+  assert.match(f.get('settings-notice-text').textContent, /已作为新皮肤导入，旧版本保留/);
+  assert.equal(f.get('settings-notice-action').hidden, true);
+  assert.equal(f.get('settings-zip-preview').hidden, true);
+});
+
+test('提交时才发现内容已存在：显示「已经导入过」并提供切换按钮', async () => {
+  const f = fixture();
+  const switchTo = `pack:${'e'.repeat(64)}:whale`;
+  f.api.previewSkinPack = async () => ({
+    ok: true, name: 'QA包装', installedName: 'QA包装', version: '1.0.0', sourceId: 'qa-pack',
+    reused: false, switchTo: '', duplicate: null, totalBytes: 0, characterCount: 1, characters: []
+  });
+  await f.window.__settingsTest.previewToken('f'.repeat(32));
+  f.api.commitResult = {
+    ok: true, reused: true, renamed: false, switchTo,
+    pack: { id: 'e'.repeat(64), name: 'QA包装', characterCount: 1 }
+  };
+  await f.window.__settingsTest.submitZip();
+  assert.match(f.get('settings-notice-text').textContent, /这个皮肤包已经导入过/);
+  const action = f.get('settings-notice-action');
+  assert.equal(action.hidden, false);
+  assert.equal(action.textContent, '切换到它');
+  action.emit('click');
+  assert.equal(f.api.skinId, switchTo);
+  assert.equal(f.get('settings-notice').hidden, true);
+});
+
+test('导入 UI 已移除 PACK_CONFIRM 覆盖确认流程', () => {
+  assert.doesNotMatch(source, /PACK_CONFIRM|needsConfirm|acceptSameName|确认并导入/);
+  assert.match(source, /这个皮肤包已经导入过/);
+  assert.match(source, /已作为新皮肤导入，旧版本保留/);
+  const html = fs.readFileSync(path.join(root, 'src', 'settings.html'), 'utf8');
+  assert.match(html, /id="settings-notice"/);
+  assert.match(html, /id="settings-notice-action"/);
 });
