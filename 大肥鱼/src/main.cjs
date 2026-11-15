@@ -521,7 +521,7 @@ else {
   }
   function zipFailure(error) {
     if (!error) return '无法导入皮肤包。';
-    if (error.code === 'PACK_CONFIRM' || (typeof error.code === 'string' && error.code.startsWith('ZIP_'))) return error.message;
+    if (typeof error.code === 'string' && (error.code.startsWith('ZIP_') || error.code === 'PACK_CHANGED')) return error.message;
     if (error.code) return '无法读取或保存皮肤包，请确认文件可读、数据目录可写。';
     return error.message || '无法导入皮肤包。';
   }
@@ -1419,7 +1419,7 @@ else {
       const sender = skinPackSender(event);
       if (!sender.ok) return sender;
       const body = payload && typeof payload === 'object' ? payload : {};
-      return skinPackSession.commit(body.token, sender.id, { acceptSameName: body.acceptSameName === true });
+      return skinPackSession.commit(body.token, sender.id);
     });
     ipcMain.handle('skin-pack:cancel', (event, token) => {
       const sender = skinPackSender(event);

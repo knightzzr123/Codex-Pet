@@ -2,7 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { randomBytes, randomUUID } = require('node:crypto');
 const { ZIP_LIMITS, inspectZipFile, writeEntries } = require('./zip-reader.cjs');
-const { findManifestDirectory } = require('./skin-packs.cjs');
+const { findManifestDirectory, firstCharacterLink } = require('./skin-packs.cjs');
 
 const TOKEN_TTL_MS = 10 * 60 * 1000;
 const MAX_TOKENS = 4;
@@ -13,7 +13,6 @@ const MESSAGES = Object.freeze({
   ZIP_LIMIT: '压缩包超过大小上限。',
   ZIP_SENDER: '只有设置窗口可以导入皮肤包。',
   TOKEN_INVALID: '这个导入凭证无效、已过期或已使用。',
-  PACK_CONFIRM: '已存在相同内容的皮肤包。确认后才会继续，并且不会复制第二份。',
   PACK_CHANGED: '皮肤包在预览之后被改过，请重新选择。',
   ZIP_FORMAT: '无法读取这个皮肤包。'
 });
@@ -53,12 +52,16 @@ function classifySkinPackPath(filePath, options = {}) {
 function publicPreview(preview) {
   return {
     name: preview.name,
+    installedName: preview.installedName || preview.name,
     version: preview.version,
     sourceId: preview.sourceId || '',
-    needsConfirm: preview.needsConfirm === true,
+    reused: preview.reused === true,
+    switchTo: preview.switchTo || '',
     duplicate: preview.duplicate ? {
       kind: preview.duplicate.kind,
-      existingName: preview.duplicate.existingName || ''
+      existingName: preview.duplicate.existingName || '',
+      existingId: preview.duplicate.existingId || '',
+      switchTo: preview.duplicate.switchTo || ''
     } : null,
     totalBytes: preview.totalBytes || 0,
     characterCount: preview.characterCount || 0,
@@ -137,7 +140,6 @@ function createSkinPackSession(options = {}) {
       createdAt: now(),
       preview: null,
       id: null,
-      needsConfirm: false,
       dir: null,
       unzipRoot: null,
       ownsDir: false
@@ -174,7 +176,6 @@ function createSkinPackSession(options = {}) {
       }
       const identified = library.identifyDirectory(record.dir);
       record.id = identified.id;
-      record.needsConfirm = identified.needsConfirm === true;
       record.preview = publicPreview(library.previewFromIdentified(identified));
       return { ok: true, ...record.preview };
     } catch (error) {
@@ -185,7 +186,7 @@ function createSkinPackSession(options = {}) {
     }
   }
 
-  async function commit(token, senderId, payload = {}) {
+  async function commit(token, senderId) {
     const found = lookup(token, senderId);
     if (!found.ok) return found;
     const record = found.record;
@@ -200,7 +201,6 @@ function createSkinPackSession(options = {}) {
       drop(token);
       return fail('PACK_CHANGED');
     }
-    if (record.needsConfirm && payload.acceptSameName !== true) return fail('PACK_CONFIRM');
     if (record.committing) return fail('TOKEN_INVALID');
     record.committing = true;
     let importDir = record.dir;
@@ -219,10 +219,19 @@ function createSkinPackSession(options = {}) {
         }
       }
       const pack = await library.importDirectory(importDir, validateImage);
+      const reused = pack.reused === true;
+      const renamed = !reused && pack.name !== again.manifest.name;
       drop(token);
-      try { onImported(pack); } catch { /* the pet window can apply the skin after the import result returns */ }
+      // Identical content is never written twice and never switched silently;
+      // the settings window offers a "switch to it" action instead.
+      if (!reused) {
+        try { onImported(pack); } catch { /* the pet window can apply the skin after the import result returns */ }
+      }
       return {
         ok: true,
+        reused,
+        renamed,
+        switchTo: reused ? (pack.duplicate?.switchTo || firstCharacterLink(pack) || '') : '',
         pack: {
           id: pack.id,
           name: pack.name,

@@ -1,5 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -68,11 +69,13 @@ function temporary(t) {
   return root;
 }
 
-function writePack(root, seed = 1, name = '会话包') {
+function writePack(root, seed = 1, name = '会话包', options = {}) {
   const directory = fs.mkdtempSync(path.join(root, 'pack-'));
   const manifest = {
-    manifestVersion: MANIFEST_VERSION, name, version: '1.0.0',
-    characters: [{ id: 'whale', name: '鲸鱼', image: 'whale.png' }]
+    manifestVersion: MANIFEST_VERSION,
+    ...(options.id ? { id: options.id } : {}),
+    name, version: '1.0.0',
+    characters: options.characters || [{ id: 'whale', name: '鲸鱼', image: 'whale.png' }]
   };
   fs.writeFileSync(path.join(directory, 'manifest.json'), JSON.stringify(manifest));
   fs.writeFileSync(path.join(directory, 'whale.png'), png(seed));
@@ -106,6 +109,14 @@ function sessionFor(root, extras = {}) {
 
 function unzipNames(library) {
   return fs.readdirSync(library.directory).filter(name => name.startsWith('.unzip-'));
+}
+
+function directoryDigest(directory) {
+  const digest = crypto.createHash('sha256');
+  for (const name of fs.readdirSync(directory).sort()) {
+    digest.update(name).update('\n').update(fs.readFileSync(path.join(directory, name)));
+  }
+  return digest.digest('hex');
 }
 
 test('未登记 token', async () => {
@@ -184,10 +195,10 @@ test('重复 commit', async t => {
   const { library, session } = sessionFor(root);
   const registered = session.register(writePack(root, 3, '第一次'), 1);
   assert.equal((await session.preview(registered.token, 1)).ok, true);
-  const first = await session.commit(registered.token, 1, { acceptSameName: false });
+  const first = await session.commit(registered.token, 1);
   assert.equal(first.ok, true);
   assert.equal(library.list().length, 1);
-  const second = await session.commit(registered.token, 1, { acceptSameName: true });
+  const second = await session.commit(registered.token, 1);
   assert.equal(second.ok, false);
   assert.equal(second.code, 'TOKEN_INVALID');
   assert.equal(library.list().length, 1);
@@ -273,22 +284,91 @@ test('关窗后临时目录被清理', async t => {
   assert.match(main, /skinPackSession\.releaseAll\(\)/);
 });
 
-test('PACK_CONFIRM 不写入，确认后不复制第二份', async t => {
+test('相同内容不重复导入，返回切换到它的目标且不自动切换', async t => {
   const root = temporary(t);
-  const { library, session } = sessionFor(root);
-  const directory = writePack(root, 7, '重复包');
-  const first = session.register(directory, 1);
+  const library = new SkinPackLibrary(root);
+  const imported = [];
+  const session = createSkinPackSession({
+    library, validateImage: async () => {}, onImported: pack => imported.push(pack.id)
+  });
+  const first = session.register(writePack(root, 7, '重复包', { id: 'qa-pack' }), 1);
   assert.equal((await session.preview(first.token, 1)).ok, true);
-  assert.equal((await session.commit(first.token, 1)).ok, true);
-  const again = session.register(directory, 1);
+  const installed = await session.commit(first.token, 1);
+  assert.equal(installed.ok, true);
+  assert.equal(installed.reused, false);
+  assert.equal(imported.length, 1);
+  const installedId = installed.pack.id;
+  const directory = library.get(installedId).directory;
+  const directoryBefore = directoryDigest(directory);
+  const indexBefore = fs.readFileSync(library.indexFile, 'utf8');
+
+  const again = session.register(writePack(root, 7, '重复包', { id: 'qa-pack' }), 1);
   const preview = await session.preview(again.token, 1);
-  assert.equal(preview.needsConfirm, true);
-  const refused = await session.commit(again.token, 1, { acceptSameName: false });
-  assert.equal(refused.code, 'PACK_CONFIRM');
+  assert.equal(preview.ok, true);
+  assert.equal(preview.reused, true);
+  assert.equal(preview.installedName, '重复包');
+  assert.equal(preview.duplicate.kind, 'content');
+  assert.equal(preview.switchTo, `pack:${installedId}:whale`);
+  const committed = await session.commit(again.token, 1);
+  assert.equal(committed.ok, true);
+  assert.equal(committed.reused, true);
+  assert.equal(committed.renamed, false);
+  assert.equal(committed.switchTo, `pack:${installedId}:whale`);
+  assert.equal(committed.pack.id, installedId);
   assert.equal(library.list().length, 1);
-  const accepted = await session.commit(again.token, 1, { acceptSameName: true });
-  assert.equal(accepted.ok, true);
-  assert.equal(library.list().length, 1);
+  assert.equal(imported.length, 1, 'identical content must not switch the pet silently');
+  assert.equal(directoryDigest(directory), directoryBefore);
+  assert.equal(fs.readFileSync(library.indexFile, 'utf8'), indexBefore);
+});
+
+test('同 sourceId 或同名的不同内容另存为（2）（3），旧包原样保留', async t => {
+  const root = temporary(t);
+  const library = new SkinPackLibrary(root);
+  const imported = [];
+  const session = createSkinPackSession({
+    library, validateImage: async () => {}, onImported: pack => imported.push(pack.id)
+  });
+  async function importPack(directory) {
+    const registered = session.register(directory, 1);
+    const preview = await session.preview(registered.token, 1);
+    assert.equal(preview.ok, true, preview.error);
+    const committed = await session.commit(registered.token, 1);
+    assert.equal(committed.ok, true, committed.error);
+    return { preview, committed };
+  }
+
+  const first = await importPack(writePack(root, 1, 'QA包装', { id: 'qa-pack' }));
+  const oldId = first.committed.pack.id;
+  const oldDirectory = library.get(oldId).directory;
+  const oldDigest = directoryDigest(oldDirectory);
+  assert.equal(first.committed.pack.name, 'QA包装');
+
+  const second = await importPack(writePack(root, 2, 'QA包装', { id: 'qa-pack' }));
+  assert.equal(second.preview.reused, false);
+  assert.equal(second.preview.duplicate.kind, 'sourceId');
+  assert.equal(second.preview.installedName, 'QA包装（2）');
+  assert.equal(second.committed.renamed, true);
+  assert.equal(second.committed.pack.name, 'QA包装（2）');
+  assert.notEqual(second.committed.pack.id, oldId);
+  assert.equal(library.list().length, 2);
+  assert.equal(imported.length, 2);
+
+  const third = await importPack(writePack(root, 3, 'QA包装', { id: 'qa-pack' }));
+  assert.equal(third.preview.installedName, 'QA包装（3）');
+  assert.equal(third.committed.pack.name, 'QA包装（3）');
+  assert.equal(library.list().length, 3);
+
+  const otherSource = await importPack(writePack(root, 4, 'QA包装', { id: 'other-pack' }));
+  assert.equal(otherSource.preview.duplicate.kind, 'name');
+  assert.equal(otherSource.preview.installedName, 'QA包装（4）');
+  assert.equal(otherSource.committed.pack.name, 'QA包装（4）');
+  assert.equal(library.list().length, 4);
+
+  const old = library.get(oldId);
+  assert.equal(old.name, 'QA包装');
+  assert.equal(directoryDigest(old.directory), oldDigest);
+  assert.deepEqual(library.list().map(pack => pack.name).sort(), ['QA包装', 'QA包装（2）', 'QA包装（3）', 'QA包装（4）']);
+  assert.equal(unzipNames(library).length, 0);
 });
 
 test('超出 4 个有效 token 时淘汰最旧并清理临时目录', async t => {

@@ -28,6 +28,11 @@ function parsePackCharacterId(value) {
   return match ? { packId: match[1], characterId: match[2] } : null;
 }
 
+function firstCharacterLink(pack) {
+  const first = Array.isArray(pack?.characters) ? pack.characters[0] : null;
+  return first && isPackId(pack.id) ? packCharacterId(pack.id, first.id) : null;
+}
+
 function safeRelativePath(value, label) {
   if (typeof value !== 'string' || !value.trim()) throw new Error(`${label}不能为空。`);
   if (value.includes('\u0000')) throw new Error(`${label}包含无法识别的字符。`);
@@ -325,6 +330,22 @@ class SkinPackLibrary {
     return true;
   }
 
+  nextDisplayName(manifest) {
+    const base = String(manifest.name);
+    const sourceKey = typeof manifest.id === 'string' ? manifest.id.toLowerCase() : '';
+    const names = new Set(this.entries.map(entry => String(entry.name).normalize('NFC')));
+    const sameSource = Boolean(sourceKey)
+      && this.entries.some(entry => String(entry.sourceId || '').toLowerCase() === sourceKey);
+    if (!sameSource && !names.has(base.normalize('NFC'))) return base;
+    // Same source ID (or the same display name from another source) never
+    // overwrites: keep every version and disambiguate with （2）, （3） …
+    for (let index = 2; index <= 999; index += 1) {
+      const candidate = `${base}（${index}）`;
+      if (!names.has(candidate.normalize('NFC'))) return candidate;
+    }
+    throw new Error('同名皮肤包过多，无法生成新的显示名称。');
+  }
+
   async importDirectory(sourceDirectory, validateImage = async () => {}) {
     const root = path.resolve(sourceDirectory);
     const manifestFile = path.join(root, 'manifest.json');
@@ -351,7 +372,14 @@ class SkinPackLibrary {
     }
     const id = packContentId(manifest, sources);
     const existing = this.get(id);
-    if (existing) return existing;
+    if (existing) {
+      return {
+        ...existing,
+        reused: true,
+        duplicate: { kind: 'content', existingId: existing.id, existingName: existing.name, switchTo: firstCharacterLink(existing) }
+      };
+    }
+    const displayName = this.nextDisplayName(manifest);
 
     const staging = path.join(this.directory, `.staging-${process.pid}-${randomUUID()}`);
     const finalDirectory = path.join(this.directory, id);
@@ -369,7 +397,7 @@ class SkinPackLibrary {
         return { id: source.character.id, name: source.character.name, image: imageName, thumbnail: thumbnailName };
       });
       const installed = {
-        manifestVersion: MANIFEST_VERSION, name: manifest.name, version: manifest.version,
+        manifestVersion: MANIFEST_VERSION, name: displayName, version: manifest.version,
         sourceId: manifest.id || null, store: manifest.store || null,
         characters: characters.map((character, index) => ({
           id: character.id, name: character.name, image: character.image, thumbnail: character.thumbnail,
@@ -380,12 +408,15 @@ class SkinPackLibrary {
       if (fs.existsSync(finalDirectory)) {
         // A concurrent/previous install with identical content wins; staging is discarded.
         fs.rmSync(staging, { recursive: true, force: true });
-        return this.get(id);
+        const winner = this.get(id);
+        return winner
+          ? { ...winner, reused: true, duplicate: { kind: 'content', existingId: winner.id, existingName: winner.name, switchTo: firstCharacterLink(winner) } }
+          : winner;
       }
       fs.renameSync(staging, finalDirectory);
       createdFinal = true;
       const entry = {
-        id, manifestVersion: MANIFEST_VERSION, name: manifest.name, version: manifest.version,
+        id, manifestVersion: MANIFEST_VERSION, name: displayName, version: manifest.version,
         importedAt: new Date().toISOString(), sourceId: manifest.id || '', characters
       };
       const entries = this.entries.concat(entry);
@@ -437,28 +468,38 @@ class SkinPackLibrary {
     }
     const id = packContentId(manifest, sources);
     const sourceKey = typeof manifest.id === 'string' ? manifest.id.toLowerCase() : '';
-    const existing = this.get(id);
+    const content = this.get(id);
     let duplicate = null;
-    if (existing) duplicate = { kind: 'content', existingId: existing.id, existingName: existing.name };
-    else if (sourceKey) {
+    if (content) {
+      duplicate = {
+        kind: 'content', existingId: content.id, existingName: content.name, switchTo: firstCharacterLink(content)
+      };
+    } else if (sourceKey) {
       const match = this.entries.find(entry => String(entry.sourceId || '').toLowerCase() === sourceKey);
-      if (match) duplicate = { kind: 'sourceId', existingId: match.id, existingName: match.name };
+      if (match) duplicate = { kind: 'sourceId', existingId: match.id, existingName: match.name, switchTo: '' };
     }
     if (!duplicate) {
       const named = this.entries.find(entry => entry.name === manifest.name);
-      if (named) duplicate = { kind: 'name', existingId: named.id, existingName: named.name };
+      if (named) duplicate = { kind: 'name', existingId: named.id, existingName: named.name, switchTo: '' };
     }
     const packedBytes = sources.reduce((sum, source) => sum + source.imageBytes.length + (source.thumbnailBytes?.length || 0), 0);
-    return { id, manifest, sources, needsConfirm: duplicate?.kind === 'content', duplicate, totalBytes: packedBytes };
+    return {
+      id, manifest, sources, duplicate,
+      installedName: content ? content.name : this.nextDisplayName(manifest),
+      totalBytes: packedBytes
+    };
   }
 
   previewFromIdentified(identified) {
+    const reused = identified.duplicate?.kind === 'content';
     return {
       id: identified.id,
       name: identified.manifest.name,
+      installedName: identified.installedName || identified.manifest.name,
       version: identified.manifest.version,
       sourceId: identified.manifest.id || '',
-      needsConfirm: identified.needsConfirm,
+      reused,
+      switchTo: reused ? (identified.duplicate.switchTo || '') : '',
       duplicate: identified.duplicate || null,
       totalBytes: identified.totalBytes || 0,
       characterCount: identified.sources.length,
@@ -514,19 +555,13 @@ class SkinPackLibrary {
     return this.inspectZip(zipPath).then(identified => this.previewFromIdentified(identified));
   }
 
-  async importPrepared(files, validateImage = async () => {}, { confirmSame = false } = {}) {
+  async importPrepared(files, validateImage = async () => {}) {
     const selected = this.filesForManifest(files);
     fs.mkdirSync(this.directory, { recursive: true });
     const temp = path.join(this.directory, `.staging-zip-${process.pid}-${randomUUID()}`);
     fs.mkdirSync(temp);
     try {
       writeEntries(temp, selected.files);
-      const identified = this.identifyDirectory(temp);
-      if (identified.needsConfirm && !confirmSame) {
-        const error = new Error(`已存在皮肤包“${identified.manifest.name}”。取消则不会做任何更改；确认后才会继续导入。`);
-        error.code = 'PACK_CONFIRM';
-        throw error;
-      }
       return await this.importDirectory(temp, validateImage);
     } finally {
       try { fs.rmSync(temp, { recursive: true, force: true }); }
@@ -534,9 +569,9 @@ class SkinPackLibrary {
     }
   }
 
-  async importZip(zipPath, validateImage = async () => {}, { confirmSame = false } = {}) {
+  async importZip(zipPath, validateImage = async () => {}) {
     const inspected = await inspectZipFile(zipPath);
-    return this.importPrepared(inspected.files, validateImage, { confirmSame });
+    return this.importPrepared(inspected.files, validateImage);
   }
 }
 
@@ -547,6 +582,7 @@ module.exports = {
   isPackId,
   packCharacterId,
   parsePackCharacterId,
+  firstCharacterLink,
   normalizeManifest,
   validateThumbnail,
   imageDimensions,

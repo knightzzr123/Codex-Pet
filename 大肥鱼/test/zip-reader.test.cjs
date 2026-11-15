@@ -343,7 +343,8 @@ test('ZIP 皮肤包可预览并导入，manifest 放在子目录时也能找到'
   assert.equal(preview.name, '鲸鱼包装');
   assert.equal(preview.characters[0].name, '鲸鱼娘');
   assert.match(preview.characters[0].thumbnailUrl, /^data:image\/png;base64,/);
-  assert.equal(preview.needsConfirm, false);
+  assert.equal(preview.reused, false);
+  assert.equal(preview.switchTo, '');
   assert.equal(library.list().length, 0);
   const imported = await library.importZip(zip, async () => {});
   assert.equal(imported.characters.length, 1);
@@ -351,17 +352,19 @@ test('ZIP 皮肤包可预览并导入，manifest 放在子目录时也能找到'
   assert.equal(fs.readdirSync(library.directory).some(name => name.startsWith('.unzip-')), false);
 });
 
-test('同一皮肤包 ID 未确认时不改动，确认后才导入', async t => {
+test('相同内容的皮肤包不重复导入，也不覆盖已有文件', async t => {
   const root = temporary(t);
   const zip = path.join(root, 'pack.zip');
   fs.writeFileSync(zip, manifestZip());
   const library = new SkinPackLibrary(root);
-  await library.importZip(zip, async () => {});
-  await assert.rejects(() => library.importZip(zip, async () => {}), error => error.code === 'PACK_CONFIRM');
+  const first = await library.importZip(zip, async () => {});
+  const again = await library.importZip(zip, async () => {});
+  assert.equal(again.id, first.id);
+  assert.equal(again.reused, true);
+  assert.equal(again.name, first.name);
   assert.equal(library.list().length, 1);
-  const again = await library.importZip(zip, async () => {}, { confirmSame: true });
-  assert.equal(again.id, library.list()[0].id);
-  assert.equal(library.list().length, 1);
+  assert.equal(again.duplicate.kind, 'content');
+  assert.equal(again.duplicate.switchTo, `pack:${first.id}:whale`);
 });
 
 test('CP936 文件名的 ZIP 能导入，坏 ZIP 留下的解压目录会在下次启动清掉', async t => {
