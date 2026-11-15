@@ -14,6 +14,11 @@ const { createDebouncedShowHide, createDebouncedDiskStatus } = require('./scope-
 const { SIZE_SCALES, DEFAULT_SIZE_LEVEL, isSizeLevel, sizeLevelFromPreferences, scaleForLevel } = require('./size.cjs');
 const { getDataDir, getWorkDir } = require('./paths.cjs');
 const { SkinLibrary, readImageFile } = require('./skins.cjs');
+const { SkinPackLibrary, packCharacterId, parsePackCharacterId } = require('./skin-packs.cjs');
+const {
+  buildPreferencesBundle, parsePreferencesBundle, PREFERENCES_FILE_NAME, PREFERENCES_FILE_MAX_BYTES
+} = require('./preferences-bundle.cjs');
+const { IDLE_BUDGET, sessionProbeDelay, pluginPollDelay, shouldSaveRuntime } = require('./idle-budget.js');
 const { openSkinEditor, getEditorWindow } = require('./skin-editor.cjs');
 const { DialogueLibrary, defaultDialogues } = require('./dialogues.cjs');
 const { openDialogueEditor, getDialogueEditorWindow } = require('./dialogue-editor.cjs');
@@ -63,6 +68,7 @@ else {
     } catch {}
   }
   const skins = new SkinLibrary(app.getPath('userData'));
+  const skinPacks = new SkinPackLibrary(app.getPath('userData'));
   const dialogueLibrary = new DialogueLibrary(app.getPath('userData'));
   const defaultSkin = { id: 'default', name: '默认 · 鲸鱼娘', url: pathToFileURL(path.join(project, 'assets', 'pet.png')).href };
   const builtInSkins = [defaultSkin, {
@@ -147,7 +153,7 @@ else {
     if (sessionTracker) state.session = sessionPresentation(sessionTracker.snapshot());
     state.experience = experienceFromPreferences(preferences);
     state.sizeLevel = preferences.sizeLevel;
-    state.skins = [...builtInSkins, ...skins.list()].map(skin => ({ id: skin.id, name: skin.name }));
+    state.skins = listSkins();
     state.anchorLeft = preferences.placement?.anchorX === 'left';
     state.refreshAvailableAt = lastAttempt ? lastAttempt + 10000 : 0;
     try { applyExperienceChrome(); } catch {}
@@ -240,11 +246,26 @@ else {
     publish();
     return geometrySettled;
   }
+  function allSkins() {
+    const builtIns = builtInSkins.map(skin => ({ ...skin, kind: 'builtin' }));
+    const images = skins.list().map(skin => ({
+      id: skin.id, name: skin.name, kind: 'image', url: pathToFileURL(skin.file).href
+    }));
+    // A pack may contain several characters. Each character is addressed by a
+    // stable `pack:<packId>:<characterId>` key stored in the same skinId field
+    // as legacy images, so switching never starts another window or process.
+    const packed = skinPacks.list().flatMap(pack => pack.characters.map(character => ({
+      id: packCharacterId(pack.id, character.id),
+      name: `${pack.name} · ${character.name}`,
+      kind: 'pack', packId: pack.id, characterId: character.id,
+      url: pathToFileURL(character.file).href,
+      thumbnailUrl: pathToFileURL(character.thumbnailFile || character.file).href
+    })));
+    return [...builtIns, ...images, ...packed];
+  }
   function skinState(id) {
-    const builtIn = builtInSkins.find(skin => skin.id === id);
-    if (builtIn) return { ...builtIn };
-    const skin = skins.get(id);
-    return skin ? { id: skin.id, name: skin.name, url: pathToFileURL(skin.file).href } : { ...defaultSkin };
+    const found = allSkins().find(skin => skin.id === id);
+    return found ? { ...found } : { ...defaultSkin, kind: 'builtin' };
   }
   function setSkin(id) {
     cancelDrag();
@@ -271,6 +292,52 @@ else {
     const skin = await skins.import(file, validateSkinImage);
     setSkin(skin.id);
     return skin;
+  }
+  async function chooseSkinPack() {
+    if (importingSkin || deletingSkin || editingDialogues) return;
+    importingSkin = true;
+    cancelDrag();
+    try {
+      const result = await dialog.showOpenDialog(win, {
+        title: '导入皮肤包文件夹', buttonLabel: '导入皮肤包', properties: ['openDirectory'],
+        message: '选择包含 manifest.json、角色图片和缩略图的文件夹'
+      });
+      if (result.canceled || !result.filePaths[0]) return;
+      const pack = await skinPacks.importDirectory(result.filePaths[0], validateSkinImage);
+      if (!pack?.characters?.length) throw new Error('皮肤包没有可用角色。');
+      const first = pack.characters[0];
+      setSkin(packCharacterId(pack.id, first.id));
+      await dialog.showMessageBox(win, {
+        type: 'info', title: '皮肤包已导入', message: `已导入“${pack.name}”`,
+        detail: `包含 ${pack.characters.length} 个角色，可在设置的“外观”分组中切换。`
+      });
+    } catch (error) {
+      await dialog.showMessageBox(win, { type: 'error', title: '无法导入皮肤包',
+        message: '皮肤包导入失败',
+        detail: error.code ? '无法读取或保存皮肤包，请确认文件夹和文件可读、数据目录可写。' : error.message });
+    } finally { importingSkin = false; }
+  }
+  async function deleteImportedPack(id) {
+    if (importingSkin || deletingSkin || editingDialogues) return false;
+    const pack = skinPacks.get(id);
+    if (!pack) return false;
+    deletingSkin = true;
+    cancelDrag();
+    try {
+      const result = await dialog.showMessageBox(win, {
+        type: 'question', title: '删除皮肤包', message: `删除“${pack.name}”？`,
+        detail: `删除插件中保存的整个皮肤包（${pack.characters.length} 个角色），原始文件夹仍会保留。`,
+        buttons: ['取消', '删除'], defaultId: 0, cancelId: 0, noLink: true
+      });
+      if (result.response !== 1 || !skinPacks.remove(id)) return false;
+      const selected = parsePackCharacterId(state.skin.id);
+      if (selected?.packId === id) setSkin('default');
+      return true;
+    } catch (error) {
+      await dialog.showMessageBox(win, { type: 'error', title: '无法删除皮肤包',
+        message: '皮肤包删除失败', detail: error.code ? '无法删除保存的皮肤包，请检查文件是否被占用或目录是否可写。' : error.message });
+      return false;
+    } finally { deletingSkin = false; }
   }
   async function chooseSkinImage() {
     if (importingSkin || deletingSkin || editingDialogues) return;
@@ -330,7 +397,7 @@ else {
     publish();
   }
   function listSkins() {
-    return [...builtInSkins, ...skins.list()].map(skin => ({ id: skin.id, name: skin.name }));
+    return allSkins().map(({ id, name, kind, thumbnailUrl }) => ({ id, name, kind, thumbnailUrl }));
   }
   function openSettingsPanel() {
     cancelDrag();
@@ -338,10 +405,12 @@ else {
   }
   function buildFunctionMenu() {
     const importedSkins = skins.list();
+    const importedPacks = skinPacks.list();
+    const busySkin = importingSkin || deletingSkin;
     // Skin / size / dialogues live in the dedicated settings panel. Menu keeps
     // a single entry plus a few advanced toggles so drag is never blocked.
     return Menu.buildFromTemplate([
-      { label: '打开设置…', enabled: !importingSkin && !deletingSkin, click: openSettingsPanel },
+      { label: '打开设置…', enabled: !busySkin, click: openSettingsPanel },
       { label: '互动选项', submenu: [
         { label: '对话框停留', submenu: BUBBLE_SECONDS.map(seconds => ({
           label: seconds === 0 ? '保持显示（Esc 收起）' : `${seconds} 秒${seconds === 8 ? '（默认）' : ''}`,
@@ -355,11 +424,17 @@ else {
         { label: '减少动画', type: 'checkbox', checked: preferences.reducedMotion,
           click: item => setExperience('reducedMotion', item.checked) }
       ] },
-      { label: '删除导入皮肤', enabled: importedSkins.length > 0 && !importingSkin && !deletingSkin,
-        submenu: importedSkins.map(skin => ({
-          label: `${skin.name.replace(/&/g, '&&')}${state.skin.id === skin.id ? '（当前使用）' : ''}`,
-          click: () => deleteImportedSkin(skin.id)
-        })) },
+      { label: '删除导入皮肤', enabled: (importedSkins.length > 0 || importedPacks.length > 0) && !busySkin,
+        submenu: [
+          ...importedSkins.map(skin => ({
+            label: `${skin.name.replace(/&/g, '&&')}${state.skin.id === skin.id ? '（当前使用）' : ''}`,
+            click: () => deleteImportedSkin(skin.id)
+          })),
+          ...importedPacks.map(pack => ({
+            label: `皮肤包：${pack.name.replace(/&/g, '&&')}（${pack.characters.length} 个角色）`,
+            click: () => deleteImportedPack(pack.id)
+          }))
+        ] },
       { label: '回到右下角', click: resetPlacement },
       { type: 'separator' },
       { label: '刷新额度', enabled: !state.loading && Date.now() - lastAttempt >= 10000, click: () => refresh() }
@@ -1052,7 +1127,11 @@ else {
     ipcMain.on('pet:size-level', (_event, level) => setSizeLevel(Number(level)));
     ipcMain.on('pet:set-skin', (_event, id) => setSkin(id));
     ipcMain.on('pet:import-skin', () => { chooseSkinImage(); });
+    ipcMain.on('pet:import-skin-pack', () => { chooseSkinPack(); });
+    ipcMain.on('pet:delete-skin-pack', (_event, id) => { deleteImportedPack(id); });
     ipcMain.on('pet:edit-dialogues', () => { chooseDialogueEditor(); });
+    ipcMain.on('pet:export-preferences', () => { exportPreferences(); });
+    ipcMain.on('pet:import-preferences', () => { importPreferences(); });
     ipcMain.on('pet:set-experience', (_event, key, value) => setExperience(key, value));
     ipcMain.on('pet:set-experiences', (_event, partial) => setExperiences(partial || {}));
     ipcMain.on('pet:reset-setting', (_event, key) => { if (typeof key === 'string') resetPreferences([key]); });

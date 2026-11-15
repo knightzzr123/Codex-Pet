@@ -40,20 +40,21 @@
     <button id="pet" class="interactive" aria-label="点击查看额度，点击气泡说话，按住拖动，右键或触摸长按打开菜单" title="点击看额度 · 点气泡和我说话 · 按住拖动 · 右键或触摸长按打开菜单">
       <img id="pet-image" src="../assets/pet.png" alt="蓝发 Q 版女仆角色" draggable="false">
     </button>
-    <aside id="settings-panel" class="settings-panel" hidden aria-hidden="true" aria-label="桌宠设置">
+    <aside id="settings-panel" class="settings-panel" hidden aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="settings-title" aria-describedby="settings-intro">
       <header class="settings-header">
-        <h2>设置</h2>
+        <h2 id="settings-title">设置</h2>
         <button type="button" id="settings-close" class="settings-close" aria-label="关闭设置">×</button>
       </header>
-      <p class="settings-intro">改动即时生效；每个分组和单项都能单独重置。</p>
+      <p class="settings-intro" id="settings-intro">改动即时生效；每个分组和单项都能单独重置。按 Esc 关闭并回到角色。</p>
 
       <section class="settings-section" data-settings-group="appearance" aria-labelledby="settings-appearance-title">
         <div class="settings-section-head">
           <h3 id="settings-appearance-title">外观</h3>
           <button type="button" class="settings-reset settings-reset-group" data-reset-group="appearance">重置本组</button>
         </div>
-        <div id="settings-skins" class="settings-row settings-skins"></div>
+        <div id="settings-skins" class="settings-row settings-skins" role="radiogroup" aria-label="角色皮肤"></div>
         <button type="button" id="settings-import-skin" class="settings-action">导入图片…</button>
+        <button type="button" id="settings-import-pack" class="settings-action">导入皮肤包（文件夹）…</button>
         <div class="settings-field settings-field-plain">
           <span class="settings-label">大小
             <button type="button" class="settings-reset" data-reset-key="sizeLevel" aria-label="重置大小">↺</button>

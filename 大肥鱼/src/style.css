@@ -135,8 +135,17 @@ body.multiple #other-windows { max-height: 34px; }
   min-height: 44px; min-width: 44px; padding: 8px 12px; border-radius: 999px;
   background: #edf2ff; color: #30447e; font-size: 13px; font-weight: 700;
 }
+.settings-chip { display: inline-flex; align-items: center; gap: 6px; }
+.settings-chip-thumb {
+  width: 26px; height: 26px; border-radius: 7px; object-fit: cover;
+  background: #fffefc; border: 1px solid #b9c8ea; flex: 0 0 auto;
+}
+.settings-chip.is-active .settings-chip-thumb { border-color: #fffefc; }
 .settings-chip.is-active, .settings-size-btn.is-active { background: #273976; color: #fffefc; }
 .settings-action { width: 100%; }
+.settings-data { margin-top: 4px; }
+.settings-data .settings-action { width: auto; flex: 1 1 120px; }
+.settings-hint { margin: 8px 0 0; font-size: 10px; line-height: 14px; color: #8a9ac0; }
 .settings-field {
   display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; align-items: center;
   margin-top: 8px; font-size: 12px; font-weight: 700; color: #586b9e;

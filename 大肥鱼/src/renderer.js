@@ -197,9 +197,27 @@ function syncSettingsControls() {
     if (skinBox && typeof skinBox.replaceChildren === 'function') {
       skinBox.replaceChildren(...skins.map(skin => {
         const button = document.createElement('button');
+        const active = state.skin?.id === skin.id;
         button.type = 'button';
-        button.className = `settings-chip${state.skin?.id === skin.id ? ' is-active' : ''}`;
-        button.textContent = skin.name;
+        button.className = `settings-chip${active ? ' is-active' : ''}`;
+        button.title = skin.name;
+        button.setAttribute?.('role', 'radio');
+        button.setAttribute?.('aria-checked', String(active));
+        button.setAttribute?.('aria-pressed', String(active));
+        button.setAttribute?.('aria-label', `${active ? '当前角色' : '切换到'}：${skin.name}`);
+        if (skin.thumbnailUrl && typeof button.append === 'function') {
+          const image = document.createElement('img');
+          image.className = 'settings-chip-thumb';
+          image.src = skin.thumbnailUrl;
+          image.alt = '';
+          image.loading = 'lazy';
+          image.setAttribute?.('aria-hidden', 'true');
+          const label = document.createElement('span');
+          label.textContent = skin.name;
+          button.append(image, label);
+        } else {
+          button.textContent = skin.name;
+        }
         button.addEventListener('click', () => window.petAPI.setSkin?.(skin.id));
         return button;
       }));
@@ -532,8 +550,29 @@ motionPreference.addEventListener('change', () => {
 });
 
 $('settings-close')?.addEventListener('click', () => setSettingsOpen(false));
+// The panel is a modal dialog: keep Tab/Shift+Tab inside it until it closes.
+$('settings-panel')?.addEventListener('keydown', event => {
+  if (event.key !== 'Tab' || !settingsOpen) return;
+  const panel = $('settings-panel');
+  const focusable = typeof panel.querySelectorAll === 'function'
+    ? [...panel.querySelectorAll('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])')]
+      .filter(node => !node.hidden)
+    : [];
+  if (!focusable.length) return;
+  const first = focusable[0], last = focusable.at(-1);
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus?.({ preventScroll: true });
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus?.({ preventScroll: true });
+  }
+});
 $('settings-import-skin')?.addEventListener('click', () => window.petAPI.importSkin());
+$('settings-import-pack')?.addEventListener('click', () => window.petAPI.importSkinPack());
 $('settings-edit-dialogues')?.addEventListener('click', () => window.petAPI.editDialogues());
+$('settings-export-preferences')?.addEventListener('click', () => window.petAPI.exportPreferences());
+$('settings-import-preferences')?.addEventListener('click', () => window.petAPI.importPreferences());
 for (const [id, key, cast] of [
   ['settings-bubble-x', 'bubbleOffsetX', Number],
   ['settings-bubble-y', 'bubbleOffsetY', Number],
