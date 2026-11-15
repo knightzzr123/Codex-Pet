@@ -394,8 +394,6 @@ test('文件夹导入只快照 manifest 引用的文件，不复制超大或未�
   const huge = path.join(directory, 'unused.bin');
   fs.writeFileSync(huge, '');
   fs.truncateSync(huge, 210 * 1024 * 1024);
-  fs.mkdirSync(path.join(directory, 'nested'));
-  fs.symlinkSync(path.join(directory, 'whale.png'), path.join(directory, 'nested', 'link.png'));
   const registered = session.register(directory, 1);
   const preview = await session.preview(registered.token, 1);
   assert.equal(preview.ok, true, preview.error);
@@ -437,4 +435,20 @@ test('文件夹导入的单图 20 MB 上限仍然生效', async t => {
   assert.equal(preview.ok, false);
   assert.match(preview.error, /20 MB|大小/);
   assert.equal(library.list().length, 0);
+});
+
+test('文件夹内任意层级的符号链接都在快照前拒绝', async t => {
+  const root = temporary(t);
+  const { library, session } = sessionFor(root);
+  const directory = writePack(root, 34, '嵌套链接包', { id: 'nested-link-pack' });
+  fs.mkdirSync(path.join(directory, 'nested'));
+  fs.symlinkSync(path.join(directory, 'whale.png'), path.join(directory, 'nested', 'link.png'));
+  const registered = session.register(directory, 1);
+  assert.equal((await session.preview(registered.token, 1)).ok, true);
+  const committed = await session.commit(registered.token, 1);
+  assert.equal(committed.ok, false);
+  assert.equal(committed.code, 'ZIP_SYMLINK');
+  assert.match(committed.error, /符号链接/);
+  assert.equal(library.list().length, 0);
+  assert.deepEqual(unzipNames(library), []);
 });

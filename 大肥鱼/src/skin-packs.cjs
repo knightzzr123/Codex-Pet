@@ -242,6 +242,23 @@ function readPackFile(root, relative, maxBytes, label) {
   return bytes;
 }
 
+function assertNoSymlinks(root) {
+  const pending = [root];
+  while (pending.length) {
+    const directory = pending.pop();
+    for (const name of fs.readdirSync(directory)) {
+      const full = path.join(directory, name);
+      const stat = fs.lstatSync(full);
+      if (stat.isSymbolicLink()) {
+        const error = new Error(`皮肤包文件夹包含符号链接或目录联接：${path.relative(root, full)}，已拒绝。`);
+        error.code = 'ZIP_SYMLINK';
+        throw error;
+      }
+      if (stat.isDirectory()) pending.push(full);
+    }
+  }
+}
+
 function writePackFile(root, relative, bytes) {
   const target = path.resolve(root, relative);
   if (target !== root && !target.startsWith(root + path.sep)) throw new Error('皮肤包文件不能跳出隔离目录。');
@@ -376,6 +393,7 @@ class SkinPackLibrary {
     if (target === source || target.startsWith(source + path.sep)) {
       throw new Error('皮肤包临时目录不能位于源文件夹内。');
     }
+    assertNoSymlinks(source);
     const manifestBytes = readPackFile(source, 'manifest.json', SKIN_PACK_LIMITS.maxManifestBytes, 'manifest.json');
     const manifest = parseManifestBytes(manifestBytes);
     fs.mkdirSync(target, { recursive: true });
