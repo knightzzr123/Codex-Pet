@@ -88,10 +88,10 @@ test('皮肤清单去重并丢弃路径字段，清单版本与皮肤包 manifes
 
 test('设置面板、preload 与主进程接线导入导出，且不打包图片', () => {
   const root = path.join(__dirname, '..');
-  const html = fs.readFileSync(path.join(root, 'src', 'index.html'), 'utf8');
+  const html = fs.readFileSync(path.join(root, 'src', 'settings.html'), 'utf8');
   const main = fs.readFileSync(path.join(root, 'src', 'main.cjs'), 'utf8');
-  const preload = fs.readFileSync(path.join(root, 'src', 'preload.cjs'), 'utf8');
-  const renderer = fs.readFileSync(path.join(root, 'src', 'renderer.js'), 'utf8');
+  const preload = fs.readFileSync(path.join(root, 'src', 'settings-preload.cjs'), 'utf8');
+  const renderer = fs.readFileSync(path.join(root, 'src', 'settings.js'), 'utf8');
   for (const id of ['settings-export-preferences', 'settings-import-preferences']) assert.match(html, new RegExp(id));
   assert.match(main, /buildPreferencesBundle/);
   assert.match(main, /parsePreferencesBundle/);

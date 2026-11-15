@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' file: data:; style-src 'self'; script-src 'self'; connect-src 'none'">
+  <title>设置 · 大肥鱼</title>
+  <link rel="stylesheet" href="settings.css">
+  <script src="settings.js" defer></script>
+</head>
+<body>
+  <div id="settings-panel" class="settings-app" role="dialog" aria-modal="true" aria-labelledby="settings-title" aria-describedby="settings-intro">
+    <header class="settings-header">
+      <div>
+        <p class="settings-kicker">大肥鱼</p>
+        <h1 id="settings-title">设置</h1>
+        <p class="settings-intro" id="settings-intro">改动即时生效，并写回原来的设置文件。每个分组和单项都能单独重置。按 Esc 关闭。</p>
+      </div>
+      <button type="button" id="settings-close" class="settings-close" aria-label="关闭设置">关闭</button>
+    </header>
+    <div class="settings-body">
+      <nav id="settings-nav" class="settings-nav" role="tablist" aria-label="设置分类">
+        <button type="button" class="settings-tab" role="tab" id="tab-appearance" data-category="appearance" aria-controls="panel-appearance" aria-selected="true" tabindex="0">外观/皮肤</button>
+        <button type="button" class="settings-tab" role="tab" id="tab-dialogue" data-category="dialogue" aria-controls="panel-dialogue" aria-selected="false" tabindex="-1">对话/台词</button>
+        <button type="button" class="settings-tab" role="tab" id="tab-behavior" data-category="behavior" aria-controls="panel-behavior" aria-selected="false" tabindex="-1">行为/待机</button>
+        <button type="button" class="settings-tab" role="tab" id="tab-accessibility" data-category="accessibility" aria-controls="panel-accessibility" aria-selected="false" tabindex="-1">无障碍</button>
+        <button type="button" class="settings-tab" role="tab" id="tab-preferences" data-category="preferences" aria-controls="panel-preferences" aria-selected="false" tabindex="-1">偏好导入导出</button>
+        <button type="button" class="settings-tab" role="tab" id="tab-about" data-category="about" aria-controls="panel-about" aria-selected="false" tabindex="-1">诊断/关于</button>
+      </nav>
+      <div class="settings-content">
+        <section class="settings-panel-page" role="tabpanel" id="panel-appearance" aria-labelledby="tab-appearance" data-settings-group="appearance">
+          <div class="settings-section-head">
+            <h2 id="settings-appearance-title">外观/皮肤</h2>
+            <button type="button" class="settings-reset settings-reset-group" data-reset-group="appearance">重置本组</button>
+          </div>
+          <p class="settings-hint">皮肤和大小会立刻反映在角色上。ZIP 会先预览，确认后才写入。</p>
+          <div id="settings-skins" class="settings-row settings-skins" role="radiogroup" aria-label="角色皮肤"></div>
+          <div class="settings-actions">
+            <button type="button" id="settings-import-skin" class="settings-action">导入图片…</button>
+            <button type="button" id="settings-import-pack" class="settings-action">导入皮肤包（文件夹）…</button>
+            <button type="button" id="settings-import-zip" class="settings-action">导入皮肤包（ZIP）…</button>
+          </div>
+          <div id="settings-zip-drop" class="settings-drop" tabindex="0" role="button" aria-label="拖入 ZIP 皮肤包以预览，或按回车选择文件">
+            <strong>拖入 ZIP 皮肤包</strong>
+            <span>支持 UTF-8 和简体中文文件名。导入前可以预览角色。</span>
+          </div>
+          <section id="settings-zip-preview" class="settings-card settings-preview" hidden aria-live="polite" aria-label="皮肤包导入预览">
+            <h3 id="settings-zip-preview-title">导入预览</h3>
+            <p id="settings-zip-preview-summary"></p>
+            <div id="settings-zip-preview-characters" class="settings-row"></div>
+            <p id="settings-zip-preview-warning" class="settings-warning" hidden></p>
+            <div class="settings-actions">
+              <button type="button" id="settings-zip-confirm" class="settings-action settings-primary">导入</button>
+              <button type="button" id="settings-zip-cancel" class="settings-action">取消</button>
+            </div>
+          </section>
+          <p id="settings-zip-status" class="settings-status" role="status" aria-live="polite"></p>
+          <div class="settings-field settings-field-plain">
+            <span class="settings-label">大小
+              <button type="button" class="settings-reset" data-reset-key="sizeLevel" aria-label="重置大小">↺</button>
+            </span>
+            <span id="settings-size-value" class="settings-value">4 档</span>
+          </div>
+          <div id="settings-size" class="settings-size" role="radiogroup" aria-label="角色大小"></div>
+        </section>
+
+        <section class="settings-panel-page" role="tabpanel" id="panel-dialogue" aria-labelledby="tab-dialogue" data-settings-group="dialogue" hidden>
+          <div class="settings-section-head">
+            <h2 id="settings-dialogue-title">对话/台词</h2>
+            <button type="button" class="settings-reset settings-reset-group" data-reset-group="dialogue">重置本组</button>
+          </div>
+          <div class="settings-card">
+            <button type="button" id="settings-edit-dialogues" class="settings-action">编辑台词…</button>
+            <div class="settings-field settings-field-plain">
+              <span class="settings-label">气泡停留
+                <button type="button" class="settings-reset" data-reset-key="bubbleSeconds" aria-label="重置气泡停留">↺</button>
+              </span>
+              <span id="settings-bubble-seconds-value" class="settings-value">8 秒</span>
+            </div>
+            <div id="settings-bubble-seconds" class="settings-chips" role="radiogroup" aria-label="气泡停留时间">
+              <button type="button" class="settings-chip" role="radio" aria-checked="false" data-bubble-seconds="5">5 秒</button>
+              <button type="button" class="settings-chip" role="radio" aria-checked="true" data-bubble-seconds="8">8 秒</button>
+              <button type="button" class="settings-chip" role="radio" aria-checked="false" data-bubble-seconds="15">15 秒</button>
+              <button type="button" class="settings-chip" role="radio" aria-checked="false" data-bubble-seconds="0">保持显示</button>
+            </div>
+            <div class="settings-toggle-row">
+              <label class="settings-switch" for="settings-advance"><input id="settings-advance" type="checkbox"> <span class="settings-switch-ui" aria-hidden="true"></span> 点人物继续对话</label>
+              <button type="button" class="settings-reset" data-reset-key="advanceOnPetTap" aria-label="重置点人物继续对话">↺</button>
+            </div>
+            <div class="settings-field">
+              <span class="settings-label">气泡偏移 X
+                <button type="button" class="settings-reset" data-reset-key="bubbleOffsetX" aria-label="重置气泡偏移 X">↺</button>
+              </span>
+              <span id="settings-bubble-x-value" class="settings-value">0</span>
+              <input id="settings-bubble-x" type="range" min="-48" max="48" step="1" value="0" aria-label="气泡水平偏移">
+            </div>
+            <div class="settings-field">
+              <span class="settings-label">气泡偏移 Y
+                <button type="button" class="settings-reset" data-reset-key="bubbleOffsetY" aria-label="重置气泡偏移 Y">↺</button>
+              </span>
+              <span id="settings-bubble-y-value" class="settings-value">0</span>
+              <input id="settings-bubble-y" type="range" min="-48" max="48" step="1" value="0" aria-label="气泡垂直偏移">
+            </div>
+          </div>
+        </section>
+
+        <section class="settings-panel-page" role="tabpanel" id="panel-behavior" aria-labelledby="tab-behavior" data-settings-group="behavior" hidden>
+          <div class="settings-section-head">
+            <h2 id="settings-behavior-title">行为/待机</h2>
+            <button type="button" class="settings-reset settings-reset-group" data-reset-group="behavior">重置本组</button>
+          </div>
+          <div class="settings-card">
+            <div class="settings-field">
+              <span class="settings-label">闲置动作间隔（秒）
+                <button type="button" class="settings-reset" data-reset-key="idleIntervalSec" aria-label="重置闲置动作间隔">↺</button>
+              </span>
+              <span id="settings-idle-value" class="settings-value">45</span>
+              <input id="settings-idle" type="range" min="5" max="300" step="5" value="45" aria-label="闲置动作间隔秒数">
+            </div>
+            <div class="settings-toggle-row">
+              <label class="settings-switch" for="settings-mirror"><input id="settings-mirror" type="checkbox" checked> <span class="settings-switch-ui" aria-hidden="true"></span> 贴左侧时转向</label>
+              <button type="button" class="settings-reset" data-reset-key="mirrorOnLeft" aria-label="重置贴左侧转向">↺</button>
+            </div>
+            <p class="settings-hint">减少动画在“无障碍”里。重置本组仍会把它一起恢复为默认。</p>
+          </div>
+        </section>
+
+        <section class="settings-panel-page" role="tabpanel" id="panel-accessibility" aria-labelledby="tab-accessibility" data-settings-group="visibility" hidden>
+          <div class="settings-section-head">
+            <h2 id="settings-accessibility-title">无障碍</h2>
+            <button type="button" class="settings-reset settings-reset-group" data-reset-group="visibility">重置透明度</button>
+          </div>
+          <div class="settings-card">
+            <div class="settings-toggle-row">
+              <label class="settings-switch" for="settings-reduced"><input id="settings-reduced" type="checkbox"> <span class="settings-switch-ui" aria-hidden="true"></span> 减少动画</label>
+              <button type="button" class="settings-reset" data-reset-key="reducedMotion" aria-label="重置减少动画">↺</button>
+            </div>
+            <div class="settings-field">
+              <span class="settings-label">透明度
+                <button type="button" class="settings-reset" data-reset-key="opacity" aria-label="重置透明度">↺</button>
+              </span>
+              <span id="settings-opacity-value" class="settings-value">100%</span>
+              <input id="settings-opacity" type="range" min="0.35" max="1" step="0.05" value="1" aria-label="角色透明度">
+            </div>
+            <p class="settings-hint">本窗口跟随系统深浅色，并使用系统高对比颜色。只用键盘即可切换左侧分类：上下方向键移动，Tab 在窗口内循环。导入的皮肤图仍是原图像素，高对比主题不能重新上色。</p>
+          </div>
+        </section>
+
+        <section class="settings-panel-page" role="tabpanel" id="panel-preferences" aria-labelledby="tab-preferences" hidden>
+          <div class="settings-section-head">
+            <h2 id="settings-preferences-title">偏好导入导出</h2>
+          </div>
+          <div class="settings-card">
+            <div class="settings-actions">
+              <button type="button" id="settings-export-preferences" class="settings-action">导出偏好…</button>
+              <button type="button" id="settings-import-preferences" class="settings-action">导入偏好…</button>
+            </div>
+            <p class="settings-hint">只导出设置与皮肤清单，不含图片、缩略图或自定义台词。</p>
+          </div>
+        </section>
+
+        <section class="settings-panel-page" role="tabpanel" id="panel-about" aria-labelledby="tab-about" hidden>
+          <div class="settings-section-head">
+            <h2 id="settings-about-title">诊断/关于</h2>
+          </div>
+          <div class="settings-card">
+            <p id="settings-display-version" class="settings-version">Codex-Pet-V1.4</p>
+            <p id="settings-version">内部版本 3.4.0</p>
+            <p class="settings-hint">诊断默认只读。在插件目录执行 <span class="settings-code">npm run diagnose</span>。需要修复时使用 <span class="settings-code">node tools/diagnose.cjs --fix --yes</span>，修复前会先备份。</p>
+            <p class="settings-hint">托盘图标和角色右键菜单打开的是同一个设置窗口。</p>
+          </div>
+          <footer class="settings-footer">
+            <button type="button" id="settings-reset-all" class="settings-action settings-primary">恢复默认</button>
+            <p>不会删除自定义台词、已导入皮肤，也不会移动当前位置。</p>
+          </footer>
+        </section>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

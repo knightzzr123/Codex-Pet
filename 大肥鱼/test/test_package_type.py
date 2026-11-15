@@ -126,12 +126,15 @@ class PackageTypeTests(unittest.TestCase):
         result = subprocess.run(command, text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         report = json.loads((self.base / 'metadata/default-version.validation.json').read_text(encoding='utf-8'))
-        self.assertEqual(report['version'], '3.3.2')
+        self.assertEqual(report['version'], '3.4.0')
         with zipfile.ZipFile(output) as archive:
             metadata = json.loads(archive.read('大肥鱼/package.json'))
             marker = json.loads(archive.read('大肥鱼/PACKAGE-TYPE.json'))
-        self.assertEqual(metadata['version'], '3.3.2')
-        self.assertEqual(marker['version'], '3.3.2')
+        self.assertEqual(metadata['version'], '3.4.0')
+        self.assertEqual(marker['version'], '3.4.0')
+        sums = (self.base / 'SHA256SUMS').read_text(encoding='utf-8')
+        self.assertIn(output.name, sums)
+        self.assertEqual((self.base / 'metadata' / 'SHA256SUMS').read_text(encoding='utf-8').split()[0], report['sha256'])
 
 
 

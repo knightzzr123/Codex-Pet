@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, dialog, ipcMain, screen, nativeImage } = require('electron');
+const { app, BrowserWindow, Menu, Tray, dialog, ipcMain, screen, nativeImage } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFile, spawn } = require('node:child_process');
@@ -26,6 +26,9 @@ const { BUBBLE_SECONDS, experienceFromPreferences } = require('./experience.cjs'
 const { createCodexSessionProbe } = require('./codex-session-probe.cjs');
 const { createSessionStateTracker, sessionPresentation } = require('./session-state.cjs');
 const { VIEWPORT, inputRegions } = require('./layout.cjs');
+const { openSettingsWindow, getSettingsWindow } = require('./settings-window.cjs');
+const { noteDisplay, relocateToVisibleDisplay } = require('./display-layout.cjs');
+const { version: APP_VERSION, DISPLAY_VERSION } = require('./version-info.cjs');
 const {
   interpolateBounds, interpolateZoom, boundsDiffer, zoomDiffer, settleDurationMs, createSettlePlayer
 } = require('./motion.cjs');
@@ -42,7 +45,9 @@ app.setName('大肥鱼 · Codex Pet');
 app.setPath('userData', smokeTest ? path.join(work, 'smoke-data') : dataDir);
 if (!app.requestSingleInstanceLock()) { app.quit(); }
 else {
-  let win, interval, scopeMonitor, pluginInterval, sessionTimer, sessionTracker, functionMenu;
+  let win, tray, interval, scopeMonitor, pluginInterval, sessionTimer, sessionTracker, functionMenu;
+  let displayMemory = { displayId: null, scaleFactor: null, crossed: false, scaleChanged: false };
+  let forceDisplayLayout = false;
   let scope = { active: false };
   let closing = false;
   let refreshPromise = null;
@@ -194,8 +199,15 @@ else {
     state.skins = listSkins();
     state.anchorLeft = preferences.placement?.anchorX === 'left';
     state.refreshAvailableAt = lastAttempt ? lastAttempt + 10000 : 0;
+    state.settingsOpen = Boolean(getSettingsWindow());
+    state.version = APP_VERSION;
+    state.displayVersion = DISPLAY_VERSION;
     try { applyExperienceChrome(); } catch {}
     if (win && !win.isDestroyed() && rendererReady) win.webContents.send('pet:state', state);
+    const settingsWindow = getSettingsWindow();
+    if (settingsWindow) {
+      try { settingsWindow.webContents.send('settings:state', state); } catch {}
+    }
   }
   function setExperience(key, value) {
     const mapped = key === 'idleInterval' ? 'idleIntervalSec' : key;
@@ -494,9 +506,61 @@ else {
   function listSkins() {
     return allSkins().map(({ id, name, kind, thumbnailUrl }) => ({ id, name, kind, thumbnailUrl }));
   }
+  function dialogOwner(event) {
+    try {
+      const owner = BrowserWindow.fromWebContents(event?.sender);
+      if (owner && !owner.isDestroyed()) return owner;
+    } catch {}
+    return win && !win.isDestroyed() ? win : undefined;
+  }
+  function zipFailure(error) {
+    if (error?.code === 'PACK_CONFIRM' || error?.code === 'ZIP_REJECTED') return error.message;
+    if (error?.code) return '无法读取或保存皮肤包，请确认文件可读、数据目录可写。';
+    return error?.message || '无法导入皮肤包。';
+  }
+  function assertZipSelection(filePath) {
+    if (typeof filePath !== 'string' || !filePath.toLowerCase().endsWith('.zip')) throw new Error('请选择 .zip 皮肤包。');
+    const stat = fs.lstatSync(filePath);
+    if (stat.isSymbolicLink() || !stat.isFile()) throw new Error('只能导入普通 ZIP 文件。');
+    return filePath;
+  }
+  async function chooseZipFile(event) {
+    const result = await dialog.showOpenDialog(dialogOwner(event), {
+      title: '导入 ZIP 皮肤包', buttonLabel: '预览', properties: ['openFile'],
+      filters: [{ name: 'ZIP 皮肤包', extensions: ['zip'] }]
+    });
+    if (result.canceled || !result.filePaths[0]) return { canceled: true, filePath: '' };
+    return { canceled: false, filePath: result.filePaths[0] };
+  }
+  async function importZipSelection(filePath, confirmSame) {
+    assertZipSelection(filePath);
+    const pack = await skinPacks.importZip(filePath, validateSkinImage, { confirmSame: confirmSame === true });
+    if (!pack?.characters?.length) throw new Error('皮肤包没有可用角色。');
+    setSkin(packCharacterId(pack.id, pack.characters[0].id));
+    return { id: pack.id, name: pack.name, characterCount: pack.characters.length };
+  }
   function openSettingsPanel() {
     cancelDrag();
-    if (win && !win.isDestroyed() && rendererReady) win.webContents.send('pet:open-settings');
+    openSettingsWindow({ anchor: win, onClosed: () => publish() });
+    publish();
+  }
+  function ensureTray() {
+    if (tray) return;
+    try {
+      const image = nativeImage.createFromPath(path.join(project, 'assets', 'icon.png'));
+      const icon = image.isEmpty?.() ? image : image.resize({ width: 16, height: 16 });
+      tray = new Tray(icon);
+      tray.setToolTip('大肥鱼');
+      tray.setContextMenu(Menu.buildFromTemplate([
+        { label: '打开设置…', click: openSettingsPanel },
+        { label: '回到右下角', click: resetPlacement },
+        { type: 'separator' },
+        { label: '退出', click: () => app.quit() }
+      ]));
+      tray.on('click', openSettingsPanel);
+    } catch (error) {
+      logLifecycle({ event: 'tray-unavailable', detail: error.message });
+    }
   }
   function buildFunctionMenu() {
     const importedSkins = skins.list();
@@ -627,6 +691,7 @@ else {
   function positionWindow() {
     if (!win || win.isDestroyed() || !scope.rect) return false;
     const area = currentArea();
+    const refreshScale = forceDisplayLayout || displayMemory.crossed || displayMemory.scaleChanged;
     const layout = scopedBounds(area, scaleForLevel(preferences.sizeLevel), preferences.placement);
     if (!layout) {
       cancelSettle();
@@ -634,23 +699,47 @@ else {
       return false;
     }
     if (drag) {
-      if (zoomDiffer(win.webContents.getZoomFactor(), layout.scale)) win.webContents.setZoomFactor(layout.scale);
+      if (zoomDiffer(win.webContents.getZoomFactor(), layout.scale) || refreshScale) win.webContents.setZoomFactor(layout.scale);
       updateInputRegion();
       return true;
     }
-    if (settle && !settle.settled && areaClose(settle.area, area)
+    if (!refreshScale && settle && !settle.settled && areaClose(settle.area, area)
       && !boundsDiffer(settle.targetBounds, layout.bounds) && !zoomDiffer(settle.targetZoom, layout.scale)) {
       updateInputRegion();
       return true;
     }
     if (settle) cancelSettle();
-    if (boundsDiffer(win.getBounds(), layout.bounds)) win.setBounds(layout.bounds);
-    if (zoomDiffer(win.webContents.getZoomFactor(), layout.scale)) win.webContents.setZoomFactor(layout.scale);
+    if (boundsDiffer(win.getBounds(), layout.bounds) || displayMemory.crossed) win.setBounds(layout.bounds);
+    if (zoomDiffer(win.webContents.getZoomFactor(), layout.scale) || refreshScale) win.webContents.setZoomFactor(layout.scale);
     updateInputRegion();
     return true;
   }
   function currentArea() {
-    return screen.screenToDipRect(null, scope.rect);
+    // Keep the nearest-display scale. Passing the pet window would use the
+    // screen the pet is still on when Codex has already crossed to another one.
+    const area = screen.screenToDipRect(null, scope.rect);
+    let displays = [];
+    try { displays = typeof screen.getAllDisplays === 'function' ? screen.getAllDisplays() : []; }
+    catch { displays = []; }
+    const noted = noteDisplay(displayMemory, displays, area);
+    displayMemory = {
+      displayId: noted.displayId,
+      scaleFactor: noted.scaleFactor,
+      crossed: noted.crossed,
+      scaleChanged: forceDisplayLayout || noted.scaleChanged
+    };
+    return area;
+  }
+  function onScreenTopology(kind) {
+    if (!win || win.isDestroyed()) return;
+    forceDisplayLayout = true;
+    try { positionWindow(); }
+    finally { forceDisplayLayout = false; }
+    if (kind !== 'removed' || !win.isVisible()) return;
+    let displays = [];
+    try { displays = screen.getAllDisplays(); } catch { displays = []; }
+    const relocated = relocateToVisibleDisplay(win.getBounds(), displays);
+    if (relocated) win.setBounds({ x: relocated.x, y: relocated.y, width: relocated.width, height: relocated.height });
   }
   let scopeVisibility;
   function ensureScopeVisibility() {
@@ -1220,6 +1309,30 @@ else {
     ipcMain.handle('pet:refresh', () => refresh());
     ipcMain.on('pet:menu', openFunctionMenu);
     ipcMain.on('pet:settings-open', openSettingsPanel);
+    ipcMain.handle('settings:get-state', () => state);
+    ipcMain.handle('settings:about', () => ({ version: APP_VERSION, displayVersion: DISPLAY_VERSION }));
+    ipcMain.on('settings:close', event => {
+      const owner = dialogOwner(event);
+      if (owner && owner !== win && !owner.isDestroyed()) owner.close();
+    });
+    ipcMain.handle('settings:choose-zip', event => chooseZipFile(event));
+    ipcMain.handle('settings:preview-zip', async (_event, filePath) => {
+      try {
+        assertZipSelection(filePath);
+        return await skinPacks.previewZip(filePath);
+      } catch (error) {
+        return { ok: false, error: zipFailure(error), code: error.code || 'ZIP_REJECTED' };
+      }
+    });
+    ipcMain.handle('settings:import-zip', async (_event, payload) => {
+      try {
+        const filePath = typeof payload === 'string' ? payload : payload?.filePath;
+        const pack = await importZipSelection(filePath, payload?.confirmSame === true);
+        return { ok: true, pack };
+      } catch (error) {
+        return { ok: false, code: error.code || 'ZIP_REJECTED', error: zipFailure(error) };
+      }
+    });
     ipcMain.on('pet:size-level', (_event, level) => setSizeLevel(Number(level)));
     ipcMain.on('pet:set-skin', (_event, id) => setSkin(id));
     ipcMain.on('pet:import-skin', () => { chooseSkinImage(); });
@@ -1263,9 +1376,10 @@ else {
       }, 250);
     });
     win.on('blur', cancelDrag);
-    screen.on('display-metrics-changed', positionWindow);
-    screen.on('display-removed', positionWindow);
-    screen.on('display-added', positionWindow);
+    screen.on('display-metrics-changed', () => onScreenTopology('metrics'));
+    screen.on('display-removed', () => onScreenTopology('removed'));
+    screen.on('display-added', () => onScreenTopology('added'));
+    ensureTray();
     await loadRenderer();
     writeIdleBudgetSnapshot('startup');
     if (smokeTest) {

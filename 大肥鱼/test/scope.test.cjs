@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { scopedBounds, snapBounds, SNAP_DISTANCE, shouldShow } = require('../src/scope.cjs');
+const { scopedBounds, snapBounds, clampBounds, SNAP_DISTANCE, shouldShow } = require('../src/scope.cjs');
 const { VIEWPORT } = require('../src/layout.cjs');
 
 const area = { x: 100, y: 50, width: 800, height: 600 };
@@ -54,6 +54,33 @@ test('snapBounds 距离边缘超过阈值时不吸附，非法区域返回 null'
   assert.equal(far.placement.anchorY, null);
   assert.equal(snapBounds(area, null), null);
   assert.equal(snapBounds({ x: 0, y: 0, width: 10, height: 10 }, { x: 0, y: 0, width, height }), null);
+});
+
+test('跨屏矩形各自落在目标区域内，125% 与 150% 连续钳制漂移不超过 1px', () => {
+  const left = { x: 0, y: 0, width: 1920, height: 1080 };
+  const right = { x: 1920, y: -240, width: 1280, height: 800 };
+  const placement = { right: 2, bottom: 2, anchorX: 'right', anchorY: 'bottom' };
+  for (const [area, scale] of [[left, 1.25], [right, 1.5]]) {
+    const layout = scopedBounds(area, scale, placement);
+    assert.equal(layout.bounds.width, Math.round(VIEWPORT.width * layout.scale));
+    assert.equal(layout.bounds.height, Math.round(VIEWPORT.height * layout.scale));
+    assert.ok(layout.bounds.x >= area.x + 2);
+    assert.ok(layout.bounds.y >= area.y + 2);
+    assert.ok(layout.bounds.x + layout.bounds.width <= area.x + area.width - 2);
+    assert.ok(layout.bounds.y + layout.bounds.height <= area.y + area.height - 2);
+    let bounds = layout.bounds;
+    for (let i = 0; i < 20; i += 1) {
+      const next = clampBounds(area, { ...bounds, x: bounds.x + (i % 2 ? 0.4 : -0.4), y: bounds.y + 0.2 });
+      assert.ok(Math.abs(next.bounds.width - layout.bounds.width) <= 1);
+      assert.ok(Math.abs(next.bounds.height - layout.bounds.height) <= 1);
+      assert.ok(Math.abs(next.bounds.x - bounds.x) <= 1);
+      assert.ok(Math.abs(next.bounds.y - bounds.y) <= 1);
+      bounds = next.bounds;
+    }
+  }
+  const fractional = scopedBounds({ x: 10, y: 20, width: 500, height: 900 }, 2, placement);
+  assert.equal(fractional.bounds.width, Math.round(VIEWPORT.width * fractional.scale));
+  assert.ok(fractional.scale < 2);
 });
 
 test('shouldShow 要求 active、ownerBound 且有 rect', () => {

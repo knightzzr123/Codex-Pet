@@ -2,6 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { createHash, randomUUID } = require('node:crypto');
 const { imageFormat } = require('./skins.cjs');
+const { readZipFile, writeEntries } = require('./zip-reader.cjs');
 const {
   MANIFEST_VERSION, THUMBNAIL_SPEC, SKIN_PACK_LIMITS, assertManifestVersion, assertSlug, optionalText
 } = require('./manifests.cjs');
@@ -123,6 +124,54 @@ function readJsonFile(file, maxBytes) {
   return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
 }
 
+function packContentId(manifest, sources) {
+  const digest = createHash('sha256');
+  digest.update(JSON.stringify(manifest));
+  for (const source of sources) {
+    digest.update('\n').update(source.character.id).update('\n');
+    digest.update(createHash('sha256').update(source.imageBytes).digest('hex')).update('\n');
+    if (source.thumbnailBytes) digest.update(createHash('sha256').update(source.thumbnailBytes).digest('hex'));
+  }
+  return digest.digest('hex');
+}
+
+function sweepTransientDirs(directory) {
+  if (!directory || !fs.existsSync(directory)) return [];
+  const removed = [];
+  for (const name of fs.readdirSync(directory)) {
+    if (!/^\.(staging|unzip)-/.test(name)) continue;
+    fs.rmSync(path.join(directory, name), { recursive: true, force: true });
+    removed.push(name);
+  }
+  return removed;
+}
+
+function findManifestDirectory(root) {
+  const found = [];
+  const stack = [root];
+  while (stack.length) {
+    const dir = stack.pop();
+    for (const name of fs.readdirSync(dir)) {
+      if (name === '__MACOSX' || name === '.DS_Store') continue;
+      const full = path.join(dir, name);
+      const stat = fs.lstatSync(full);
+      if (stat.isSymbolicLink()) throw new Error('皮肤包里包含符号链接。');
+      if (stat.isDirectory()) stack.push(full);
+      else if (name === 'manifest.json' && stat.isFile()) found.push(dir);
+    }
+  }
+  if (!found.length) throw new Error('皮肤包缺少 manifest.json。');
+  if (found.length > 1) throw new Error('皮肤包里有多份 manifest.json。');
+  return found[0];
+}
+
+function previewDataUrl(bytes) {
+  if (!bytes || bytes.length > 512 * 1024) return null;
+  const format = imageFormat(bytes);
+  if (!format || !FORMATS[format]) return null;
+  return `data:${FORMATS[format]};base64,${bytes.toString('base64')}`;
+}
+
 function atomicWrite(file, contents) {
   const temporary = `${file}.${randomUUID()}.tmp`;
   try {
@@ -149,6 +198,7 @@ class SkinPackLibrary {
     this.directory = path.join(dataDirectory, 'skin-packs');
     this.indexFile = path.join(this.directory, 'index.json');
     this.entries = [];
+    sweepTransientDirs(this.directory);
     try {
       const saved = JSON.parse(fs.readFileSync(this.indexFile, 'utf8').replace(/^\uFEFF/, ''));
       if (saved.version === PACKS_INDEX_VERSION && Array.isArray(saved.packs)) {
@@ -173,6 +223,7 @@ class SkinPackLibrary {
           id: item.id, manifestVersion: MANIFEST_VERSION,
           name: item.name.slice(0, 80), version: String(item.version || '1.0.0').slice(0, 32),
           importedAt: typeof item.importedAt === 'string' ? item.importedAt : '',
+          sourceId: typeof item.sourceId === 'string' ? item.sourceId.slice(0, 40) : '',
           characters: item.characters.map(character => ({
             id: character.id, name: character.name.slice(0, 80),
             image: character.image, thumbnail: character.thumbnail || null
@@ -257,14 +308,7 @@ class SkinPackLibrary {
       if (totalBytes > SKIN_PACK_LIMITS.maxTotalBytes) throw new Error('皮肤包总大小超过 200 MB。');
       sources.push({ character, imageBytes, extension, thumbnailBytes, thumbnailFormat });
     }
-    const digest = createHash('sha256');
-    digest.update(JSON.stringify(manifest));
-    for (const source of sources) {
-      digest.update('\n').update(source.character.id).update('\n');
-      digest.update(createHash('sha256').update(source.imageBytes).digest('hex')).update('\n');
-      if (source.thumbnailBytes) digest.update(createHash('sha256').update(source.thumbnailBytes).digest('hex'));
-    }
-    const id = digest.digest('hex');
+    const id = packContentId(manifest, sources);
     const existing = this.get(id);
     if (existing) return existing;
 
@@ -301,7 +345,7 @@ class SkinPackLibrary {
       createdFinal = true;
       const entry = {
         id, manifestVersion: MANIFEST_VERSION, name: manifest.name, version: manifest.version,
-        importedAt: new Date().toISOString(), characters
+        importedAt: new Date().toISOString(), sourceId: manifest.id || '', characters
       };
       const entries = this.entries.concat(entry);
       try {
@@ -320,6 +364,85 @@ class SkinPackLibrary {
       throw error;
     }
   }
+
+  sourceIds() {
+    const ids = [];
+    for (const entry of this.entries) {
+      if (entry.sourceId) { ids.push(entry.sourceId); continue; }
+      try {
+        const installed = JSON.parse(fs.readFileSync(path.join(this.directory, entry.id, 'manifest.json'), 'utf8').replace(/^\uFEFF/, ''));
+        if (typeof installed.sourceId === 'string' && installed.sourceId) ids.push(installed.sourceId);
+      } catch { /* index without a readable manifest still works for listing */ }
+    }
+    return ids;
+  }
+
+  identifyDirectory(root) {
+    const manifest = normalizeManifest(readJsonFile(path.join(root, 'manifest.json'), SKIN_PACK_LIMITS.maxManifestBytes));
+    const sources = [];
+    let totalBytes = 0;
+    for (const character of manifest.characters) {
+      const imageBytes = readPackFile(root, character.image, SKIN_PACK_LIMITS.maxImageBytes, `角色“${character.name}”的图片`);
+      if (!imageFormat(imageBytes)) throw new Error(`角色“${character.name}”的图片格式不受支持。`);
+      totalBytes += imageBytes.length;
+      let thumbnailBytes = null;
+      if (character.thumbnail) {
+        thumbnailBytes = readPackFile(root, character.thumbnail, THUMBNAIL_SPEC.maxBytes, `角色“${character.name}”的缩略图`);
+        validateThumbnail(thumbnailBytes);
+        totalBytes += thumbnailBytes.length;
+      }
+      if (totalBytes > SKIN_PACK_LIMITS.maxTotalBytes) throw new Error('皮肤包总大小超过 200 MB。');
+      sources.push({ character, imageBytes, thumbnailBytes });
+    }
+    const id = packContentId(manifest, sources);
+    const needsConfirm = Boolean(this.get(id)) || (Boolean(manifest.id) && this.sourceIds().includes(manifest.id));
+    return { id, manifest, sources, needsConfirm };
+  }
+
+  previewFromIdentified(identified) {
+    return {
+      id: identified.id,
+      name: identified.manifest.name,
+      version: identified.manifest.version,
+      sourceId: identified.manifest.id || '',
+      needsConfirm: identified.needsConfirm,
+      characters: identified.sources.map(source => ({
+        id: source.character.id,
+        name: source.character.name,
+        thumbnailUrl: previewDataUrl(source.thumbnailBytes)
+          || (source.imageBytes.length <= 256 * 1024 ? previewDataUrl(source.imageBytes) : null)
+      }))
+    };
+  }
+
+  async withUnzipped(zipPath, visit) {
+    fs.mkdirSync(this.directory, { recursive: true });
+    const temp = path.join(this.directory, `.unzip-${process.pid}-${randomUUID()}`);
+    fs.mkdirSync(temp);
+    try {
+      const entries = await readZipFile(zipPath);
+      writeEntries(temp, entries);
+      return await visit(findManifestDirectory(temp));
+    } finally {
+      fs.rmSync(temp, { recursive: true, force: true });
+    }
+  }
+
+  previewZip(zipPath) {
+    return this.withUnzipped(zipPath, directory => this.previewFromIdentified(this.identifyDirectory(directory)));
+  }
+
+  async importZip(zipPath, validateImage = async () => {}, { confirmSame = false } = {}) {
+    return this.withUnzipped(zipPath, async directory => {
+      const identified = this.identifyDirectory(directory);
+      if (identified.needsConfirm && !confirmSame) {
+        const error = new Error(`已存在皮肤包“${identified.manifest.name}”。取消则不会做任何更改；确认后才会继续导入。`);
+        error.code = 'PACK_CONFIRM';
+        throw error;
+      }
+      return this.importDirectory(directory, validateImage);
+    });
+  }
 }
 
 module.exports = {
@@ -332,5 +455,8 @@ module.exports = {
   normalizeManifest,
   validateThumbnail,
   imageDimensions,
-  safeRelativePath
+  safeRelativePath,
+  sweepTransientDirs,
+  findManifestDirectory,
+  packContentId
 };

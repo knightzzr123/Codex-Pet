@@ -18,6 +18,9 @@ test('Release 自检覆盖安装、卸载、升级保留数据三条路径', () 
     assert.equal(report.paths.upgrade.dataPreserved, true);
     assert.notEqual(report.paths.upgrade.oldVersion, report.paths.upgrade.newVersion);
     assert.equal(report.packageChecks.checks.type, 'complete');
+    const dataFiles = require('../tools/release-check.cjs').DATA_FILES;
+    assert.ok(dataFiles.some(name => name.startsWith('skin-packs/')));
+    assert.ok(dataFiles.includes('dafeiyu-preferences.json'));
   } finally { fs.rmSync(report.baseDir, { recursive: true, force: true }); }
 });
 

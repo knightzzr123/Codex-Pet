@@ -182,16 +182,22 @@ test('多角色选择链接可稳定解析，非法链接返回 null', () => {
 test('主进程接入皮肤包导入、同窗口多角色切换与单实例锁', () => {
   const root = path.join(__dirname, '..');
   const main = fs.readFileSync(path.join(root, 'src', 'main.cjs'), 'utf8');
-  const html = fs.readFileSync(path.join(root, 'src', 'index.html'), 'utf8');
-  const preload = fs.readFileSync(path.join(root, 'src', 'preload.cjs'), 'utf8');
-  const renderer = fs.readFileSync(path.join(root, 'src', 'renderer.js'), 'utf8');
+  const html = fs.readFileSync(path.join(root, 'src', 'settings.html'), 'utf8');
+  const preload = fs.readFileSync(path.join(root, 'src', 'settings-preload.cjs'), 'utf8');
+  const renderer = fs.readFileSync(path.join(root, 'src', 'settings.js'), 'utf8');
   assert.match(main, /requestSingleInstanceLock/);
   assert.match(main, /new SkinPackLibrary/);
   assert.match(main, /pet:import-skin-pack/);
   assert.match(main, /packCharacterId\(pack\.id, character\.id\)/);
   assert.match(main, /setSkin\(packCharacterId\(pack\.id, first\.id\)\)/);
+  assert.match(main, /importZipSelection/);
   assert.equal((main.match(/new BrowserWindow/g) || []).length, 1);
   assert.match(html, /id="settings-import-pack"/);
+  assert.match(html, /id="settings-import-zip"/);
+  assert.match(html, /id="settings-zip-drop"/);
+  assert.match(main, /extensions: \['zip'\]/);
   assert.match(preload, /importSkinPack/);
+  assert.match(preload, /previewZip/);
   assert.match(renderer, /settings-import-pack/);
+  assert.match(renderer, /settings-zip-drop/);
 });

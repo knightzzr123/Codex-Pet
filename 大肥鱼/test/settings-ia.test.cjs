@@ -73,10 +73,10 @@ test('默认值可重复应用且非法键不产生改动', () => {
 });
 
 test('面板与主进程接线包含单项重置、分组重置和恢复默认', () => {
-  const html = fs.readFileSync(path.join(__dirname, '..', 'src', 'index.html'), 'utf8');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'src', 'settings.html'), 'utf8');
   const main = fs.readFileSync(path.join(__dirname, '..', 'src', 'main.cjs'), 'utf8');
-  const preload = fs.readFileSync(path.join(__dirname, '..', 'src', 'preload.cjs'), 'utf8');
-  const renderer = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer.js'), 'utf8');
+  const preload = fs.readFileSync(path.join(__dirname, '..', 'src', 'settings-preload.cjs'), 'utf8');
+  const renderer = fs.readFileSync(path.join(__dirname, '..', 'src', 'settings.js'), 'utf8');
   for (const group of ['appearance', 'dialogue', 'behavior', 'visibility']) {
     assert.match(html, new RegExp(`data-reset-group="${group}"`));
   }

@@ -5,7 +5,14 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 
 const REQUIRED_FILES = ['plugin.json', '.codex-plugin/plugin.json', 'package.json', 'src/plugin-server.cjs', 'mcp.json', '.mcp.json', 'PACKAGE-TYPE.json'];
-const DATA_FILES = ['settings.json', 'dialogues.json', 'skins/custom.png'];
+const PACK_ID = 'ab'.repeat(32);
+const DATA_FILES = [
+  'settings.json', 'dialogues.json', 'skins/custom.png',
+  'skin-packs/index.json',
+  `skin-packs/${PACK_ID}/manifest.json`,
+  `skin-packs/${PACK_ID}/c-0-whale.png`,
+  'dafeiyu-preferences.json'
+];
 
 function hashFile(file) {
   return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
@@ -87,6 +94,20 @@ function seedUserData(dataDir) {
   }, null, 2) + '\n');
   fs.writeFileSync(path.join(dataDir, 'dialogues.json'), JSON.stringify({ speech: ['升级也要保留我'], sleepy: [] }, null, 2) + '\n');
   fs.writeFileSync(path.join(dataDir, 'skins', 'custom.png'), Buffer.from('fake-png-bytes'));
+  const packDir = path.join(dataDir, 'skin-packs', PACK_ID);
+  fs.mkdirSync(packDir, { recursive: true });
+  fs.writeFileSync(path.join(packDir, 'manifest.json'), JSON.stringify({
+    manifestVersion: 1, name: '升级保留包', sourceId: 'kept-pack',
+    characters: [{ id: 'whale', name: '鲸鱼娘', image: 'c-0-whale.png', thumbnail: null }]
+  }, null, 2) + '\n');
+  fs.writeFileSync(path.join(packDir, 'c-0-whale.png'), Buffer.from('pack-image-bytes'));
+  fs.writeFileSync(path.join(dataDir, 'skin-packs', 'index.json'), JSON.stringify({
+    version: 1, packs: [{ id: PACK_ID, name: '升级保留包', manifestVersion: 1 }]
+  }, null, 2) + '\n');
+  fs.writeFileSync(path.join(dataDir, 'dafeiyu-preferences.json'), JSON.stringify({
+    kind: 'dafeiyu.preferences', manifestVersion: 1,
+    settings: { skinId: 'rose', opacity: 0.7 }
+  }, null, 2) + '\n');
 }
 
 function snapshotData(dataDir) {
