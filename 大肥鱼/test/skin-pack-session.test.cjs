@@ -8,6 +8,7 @@ const zlib = require('node:zlib');
 const { SkinPackLibrary } = require('../src/skin-packs.cjs');
 const { MANIFEST_VERSION } = require('../src/manifests.cjs');
 const { createSkinPackSession, TOKEN_TTL_MS, classifySkinPackPath } = require('../src/skin-pack-session.cjs');
+const { userError } = require('../src/errors.cjs');
 
 const DAMAGED_ARCHIVE = '压缩包已损坏或格式不受支持，请重新打包后再试。';
 
@@ -920,8 +921,8 @@ test('注入的 fs 错误按 errno 归类并写诊断，不显示英文或路径
   const cases = [
     { code: 'EACCES', errno: -13, syscall: 'open', expectCode: 'ZIP_ACCESS', expect: '没有权限读取皮肤包里的文件。' },
     { code: 'EPERM', errno: -1, syscall: 'open', expectCode: 'ZIP_ACCESS', expect: '没有权限读取皮肤包里的文件。' },
-    { code: 'EBUSY', errno: -16, syscall: 'open', expectCode: 'ZIP_ACCESS', expect: '没有权限读取皮肤包里的文件。' },
-    { code: 'ENOSPC', errno: -28, syscall: 'write', expectCode: 'ZIP_ACCESS', expect: '无法读取或保存皮肤包，请确认文件可读、数据目录可写。' }
+    { code: 'EBUSY', errno: -16, syscall: 'open', expectCode: 'ZIP_ACCESS', expect: '文件被占用或没有权限读取，请稍后重试。' },
+    { code: 'ENOSPC', errno: -28, syscall: 'write', expectCode: 'ZIP_ACCESS', expect: '无法读取或保存皮肤包，请确认文件能打开，且磁盘有空间。' }
   ];
   for (const item of cases) {
     const diagnostics = [];
@@ -1004,4 +1005,60 @@ test('未标记的回调抛 EACCES 时仍按 errno 给 ZIP_ACCESS 并写诊断�
   assert.equal(diagnostics.length, 1);
   assert.equal(diagnostics[0].code, 'EACCES');
   assert.match(diagnostics[0].detail, /EACCES/);
+});
+
+test('validateImage 抛 userError 时 commit 原样返回该文案', async t => {
+  const root = temporary(t);
+  const message = '这张图片无法显示，可能已损坏。请换一张图片。';
+  const diagnostics = [];
+  const { session } = sessionFor(root, {
+    onDiagnostic: entry => diagnostics.push(entry),
+    validateImage: async () => { throw userError(message); }
+  });
+  const registered = session.register(writePack(root, 70, '解码失败包'), 1);
+  const preview = await session.preview(registered.token, 1);
+  assert.equal(preview.ok, true, preview.error);
+  const committed = await session.commit(registered.token, 1);
+  assert.equal(committed.ok, false);
+  assert.equal(committed.code, 'PACK_INVALID');
+  assert.equal(committed.error, message);
+  assert.equal(diagnostics.length, 0);
+});
+
+test('commit 写数据目录遇到 ENOENT 报通用 IO 文案，而不是「文件夹不存在」', async t => {
+  const root = temporary(t);
+  const diagnostics = [];
+  const { session } = sessionFor(root, { onDiagnostic: entry => diagnostics.push(entry) });
+  const registered = session.register(writeZip(root, 71), 1);
+  assert.equal((await session.preview(registered.token, 1)).ok, true);
+  const writeFile = fs.writeFileSync;
+  t.mock.method(fs, 'writeFileSync', function (file, ...args) {
+    const target = String(file);
+    if (target.includes(`${path.sep}.staging-`)) {
+      throw Object.assign(new Error(`ENOENT: no such file or directory, open '${target}'`), {
+        code: 'ENOENT', errno: -2, syscall: 'open', path: target
+      });
+    }
+    return writeFile.call(fs, file, ...args);
+  });
+  const committed = await session.commit(registered.token, 1);
+  assert.equal(committed.ok, false);
+  assert.equal(committed.code, 'ZIP_ACCESS');
+  assert.equal(committed.error, '无法读取或保存皮肤包，请确认文件能打开，且磁盘有空间。');
+  assert.doesNotMatch(committed.error, /文件夹不存在|重新选择/);
+  assert.equal(diagnostics.length, 1);
+  assert.equal(diagnostics[0].code, 'ENOENT');
+  assert.match(diagnostics[0].detail, /ENOENT/);
+});
+
+test('main.cjs 的图片解码失败改用 userError，提交阶段能给出具体原因', () => {
+  const main = fs.readFileSync(path.join(__dirname, '..', 'src', 'main.cjs'), 'utf8');
+  assert.match(main, /throw userError\('这张图片无法显示，可能已损坏。请换一张图片。'\);/);
+});
+
+test('会话层导入链路不再直接抛出普通中文 Error（skins.cjs 单图导入除外）', () => {
+  for (const name of ['skin-pack-session.cjs', 'skin-packs.cjs', 'manifests.cjs', 'zip-reader.cjs']) {
+    const source = fs.readFileSync(path.join(__dirname, '..', 'src', name), 'utf8');
+    assert.doesNotMatch(source, /new Error\([^)]*[\u4e00-\u9fff]/u, name);
+  }
 });

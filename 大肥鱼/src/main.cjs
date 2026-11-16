@@ -370,7 +370,10 @@ else {
       image.onerror = () => { clearTimeout(timer); resolve(false); };
       image.src = ${JSON.stringify(url)};
     })`);
-    if (!valid) throw new Error('这张图片无法显示，可能已损坏。请换一张图片。');
+    if (!valid) {
+      const { userError } = require('./errors.cjs');
+      throw userError('这张图片无法显示，可能已损坏。请换一张图片。');
+    }
   }
   async function importSkinFile(file) {
     const skin = await skins.import(file, validateSkinImage);

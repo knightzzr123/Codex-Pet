@@ -46,17 +46,23 @@ const OPAQUE_CODES = new Set(['ZIP_HEADER', 'ZIP_CRC', 'ZIP_FORMAT']);
 // Node fs failures: the message is English and embeds the absolute path, so it
 // must never reach the settings window. `errno`/`syscall` are the markers Node
 // sets on every fs error; the code set also catches errors that were re-wrapped
-// without them. EACCES/EPERM/EBUSY mean "cannot read or write it now" (a lock
-// held by a browser or antivirus on Windows behaves the same way).
-const ACCESS_ERROR_CODES = new Set(['EACCES', 'EPERM', 'EBUSY']);
+// without them. EACCES/EPERM mean "cannot read or write it now"; EBUSY usually
+// means a browser or antivirus still holds the file open, so saying only "no
+// permission" would send the user looking for the wrong problem.
+const ACCESS_ERROR_CODES = new Set(['EACCES', 'EPERM']);
+const BUSY_ERROR_CODES = new Set(['EBUSY']);
 const MISSING_ERROR_CODES = new Set(['ENOENT', 'ENOTDIR']);
 const SYSTEM_ERROR_CODES = new Set([
   ...ACCESS_ERROR_CODES,
+  ...BUSY_ERROR_CODES,
   ...MISSING_ERROR_CODES,
   'EIO', 'ENOSPC', 'EROFS', 'EMFILE', 'ENFILE', 'ENAMETOOLONG',
   'EEXIST', 'EISDIR', 'ELOOP', 'ENOTEMPTY', 'EXDEV', 'EINVAL', 'UNKNOWN'
 ]);
-const GENERIC_IO_ERROR = '无法读取或保存皮肤包，请确认文件可读、数据目录可写。';
+const BUSY_IO_ERROR = '文件被占用或没有权限读取，请稍后重试。';
+// The data dir is technical wording: what the user can act on is the file and
+// the disk, so the generic sentence names those instead.
+const GENERIC_IO_ERROR = '无法读取或保存皮肤包，请确认文件能打开，且磁盘有空间。';
 
 // Zip failures and `UserFacingError`s are thrown by this project with Chinese
 // copy meant for the user. A Node fs error is not: it is logged and replaced.
@@ -75,8 +81,13 @@ function isSystemError(error) {
 
 function systemFailure(error, context = {}) {
   const code = typeof error?.code === 'string' ? error.code : '';
+  if (BUSY_ERROR_CODES.has(code)) return { code: 'ZIP_ACCESS', message: BUSY_IO_ERROR };
   if (ACCESS_ERROR_CODES.has(code)) return { code: 'ZIP_ACCESS', message: MESSAGES.ZIP_ACCESS };
   if (MISSING_ERROR_CODES.has(code)) {
+    // commit writes into the data directory; if an entry disappears while that
+    // write is in flight, the selected folder still exists, so telling the user
+    // to pick it again would be misleading. Report the generic IO reason.
+    if (context.writing) return { code: 'ZIP_ACCESS', message: GENERIC_IO_ERROR };
     return context.kind === 'zip'
       ? { code: 'PACK_INVALID', message: '文件不存在，请重新选择皮肤包文件。' }
       : { code: 'PACK_INVALID', message: '文件夹不存在，请重新选择皮肤包文件夹。' };
@@ -386,7 +397,10 @@ function createSkinPackSession(options = {}) {
     } catch (error) {
       if (record.kind === 'directory' && record.ownsDir) drop(token);
       else record.committing = false;
-      return failure(error, { kind: record.kind });
+      // Reaching here means commit was writing into the data directory (the
+      // snapshot or the pack files). A missing path is not the selected folder,
+      // so the not-found copy above must not be used.
+      return failure(error, { kind: record.kind, writing: true });
     }
   }
 
