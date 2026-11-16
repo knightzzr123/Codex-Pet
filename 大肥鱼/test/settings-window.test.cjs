@@ -44,6 +44,7 @@ function fixture() {
   function query(selector) {
     if (selector === '[role="tab"]' || selector === '#settings-nav [role="tab"]') return get('settings-nav').focusables;
     if (selector === '[data-bubble-seconds]') return get('settings-panel').focusables.filter(node => node.attrs.has('data-bubble-seconds'));
+    if (selector === '.settings-skin-card' || selector === '[data-skin-id]') return get('settings-skins').focusables;
     if (selector.startsWith('button')) return get('settings-panel').focusables;
     return [];
   }
@@ -214,82 +215,248 @@ test('HTML 有六个分类、读屏名称、拖拽区和导入前预览', () => 
   assert.match(source, /aria-label', `\$\{active \? '当前角色' : '切换到'\}/);
 });
 
-test('已导入过的皮肤包提示「已经导入过」，只给「切换到它」而不重复导入', async () => {
+// Z-5 helpers: count every write to a live region and seed skin cards so the
+// focus target after a switch can be resolved like in the real renderer.
+function liveRecorder(f, id) {
+  const node = f.get(id);
+  const writes = [];
+  let value = node.textContent;
+  Object.defineProperty(node, 'textContent', {
+    configurable: true,
+    get: () => value,
+    set: next => { value = next; writes.push(next); }
+  });
+  return { node, writes, value: () => value };
+}
+
+function seedSkins(f, ids) {
+  const skins = ids.map(id => ({ id, name: `皮肤 ${id}`, kind: 'pack' }));
+  f.window.__settingsTest.applyState({ skins, skin: skins[0], experience: {} });
+  const box = f.get('settings-skins');
+  box.focusables = [...box.children];
+  return skins;
+}
+
+function skinCard(f, id) {
+  return f.get('settings-skins').children.find(node => node.getAttribute('data-skin-id') === id);
+}
+
+const reusedSwitchPreview = switchTo => ({
+  ok: true, name: 'QA包装', installedName: 'QA包装', version: '1.0.0', sourceId: 'qa-pack',
+  reused: true, switchTo, duplicate: { kind: 'content', existingName: 'QA包装', switchTo },
+  totalBytes: 0, characterCount: 1, characters: []
+});
+
+const freshPreview = extra => ({
+  ok: true, name: 'QA包装', installedName: 'QA包装（2）', version: '1.0.0', sourceId: 'qa-pack',
+  reused: false, switchTo: '', duplicate: null, totalBytes: 0, characterCount: 1, characters: [],
+  ...extra
+});
+
+test('已导入过的皮肤包提示「已经导入过」，只给「切换到它」而不重复导入，切换后焦点在皮肤卡片', async () => {
   const f = fixture();
   const switchTo = `pack:${'a'.repeat(64)}:whale`;
-  f.api.previewSkinPack = async () => ({
-    ok: true, name: 'QA包装', installedName: 'QA包装', version: '1.0.0', sourceId: 'qa-pack',
-    reused: true, switchTo, duplicate: { kind: 'content', existingName: 'QA包装', switchTo },
-    totalBytes: 0, characterCount: 1, characters: []
-  });
+  seedSkins(f, ['default', switchTo]);
+  f.get('settings-notice').hidden = true;
+  const polite = liveRecorder(f, 'settings-live');
+  const assertive = liveRecorder(f, 'settings-live-assertive');
+  f.api.previewSkinPack = async () => reusedSwitchPreview(switchTo);
   const token = 'b'.repeat(32);
   await f.window.__settingsTest.previewToken(token);
   const warning = f.get('settings-zip-preview-warning');
   assert.equal(warning.hidden, false);
   assert.match(warning.textContent, /这个皮肤包已经导入过/);
   assert.equal(f.get('settings-zip-confirm').textContent, '切换到它');
+  // 出现带「切换到它」的提示时，焦点在该按钮上。
+  assert.equal(f.doc.activeElement, f.get('settings-zip-confirm'));
+  assert.deepEqual(polite.writes, ['这个皮肤包已经导入过。可以切换到「QA包装」。']);
 
   await f.window.__settingsTest.submitZip();
   assert.equal(f.api.canceled, token);
   assert.equal(f.api.skinId, switchTo);
   assert.equal(f.api.committed, undefined, 'identical content must not be committed again');
   assert.equal(f.get('settings-zip-preview').hidden, true);
+  // 切换成功后焦点移到对应皮肤卡片。
+  assert.equal(f.doc.activeElement, skinCard(f, switchTo));
+  assert.equal(polite.writes.at(-1), '已切换到「QA包装」。');
+  assert.equal(polite.writes.length, 2, '预览一次播报、切换一次播报，每个结果只播一次');
+  assert.equal(assertive.writes.length, 0, '内容相同/切换不再走 assertive');
 });
 
-test('同 ID 或同名的不同内容提示另存为（2），成功后给非打断提示', async () => {
+test('内容相同但没有切换目标时按钮是「知道了」，确认后焦点回拖拽区且不重复播报', async () => {
   const f = fixture();
-  f.api.previewSkinPack = async () => ({
-    ok: true, name: 'QA包装', installedName: 'QA包装（2）', version: '1.0.0', sourceId: 'qa-pack',
-    reused: false, switchTo: '',
-    duplicate: { kind: 'sourceId', existingName: 'QA包装', existingId: 'old', switchTo: '' },
-    totalBytes: 0, characterCount: 1, characters: []
+  seedSkins(f, ['default']);
+  f.get('settings-notice').hidden = true;
+  const polite = liveRecorder(f, 'settings-live');
+  f.api.previewSkinPack = async () => reusedSwitchPreview('');
+  await f.window.__settingsTest.previewToken('1'.repeat(32));
+  assert.equal(f.get('settings-zip-confirm').textContent, '知道了');
+  await f.window.__settingsTest.submitZip();
+  assert.equal(f.api.skinId, undefined, 'no switch target means no switch');
+  assert.equal(f.doc.activeElement, f.get('settings-zip-drop'));
+  assert.deepEqual(polite.writes, ['这个皮肤包已经导入过。'], '确认只清理预览，不再补播一次');
+});
+
+test('同 ID 的不同内容：预览文案改口径，导入后焦点回拖拽区并只 polite 播报一次', async () => {
+  const f = fixture();
+  f.get('settings-notice').hidden = true;
+  const polite = liveRecorder(f, 'settings-live');
+  const assertive = liveRecorder(f, 'settings-live-assertive');
+  f.api.previewSkinPack = async () => freshPreview({
+    duplicate: { kind: 'sourceId', existingName: 'QA包装', existingId: 'old', switchTo: '' }
   });
   const token = 'c'.repeat(32);
   await f.window.__settingsTest.previewToken(token);
   const warning = f.get('settings-zip-preview-warning');
-  assert.match(warning.textContent, /QA包装（2）/);
-  assert.match(warning.textContent, /旧版本保留/);
+  assert.equal(warning.textContent, '已有这个皮肤包的另一个版本「QA包装」。将导入为「QA包装（2）」，旧版本保留。');
   assert.equal(f.get('settings-zip-confirm').textContent, '导入');
+  polite.writes.length = 0;
 
   f.api.commitResult = {
     ok: true, reused: false, renamed: true, switchTo: '',
+    duplicate: { kind: 'sourceId', existingName: 'QA包装', existingId: 'old' },
     pack: { id: 'd'.repeat(64), name: 'QA包装（2）', characterCount: 1 }
   };
   await f.window.__settingsTest.submitZip();
   assert.equal(f.api.committed.token, token);
   const notice = f.get('settings-notice');
   assert.equal(notice.hidden, false);
-  assert.match(f.get('settings-notice-text').textContent, /已作为新皮肤导入，旧版本保留/);
+  assert.equal(f.get('settings-notice-text').textContent, '已作为新皮肤导入「QA包装（2）」，旧版本保留。');
   assert.equal(f.get('settings-notice-action').hidden, true);
   assert.equal(f.get('settings-zip-preview').hidden, true);
+  assert.equal(f.doc.activeElement, f.get('settings-zip-drop'));
+  assert.deepEqual(polite.writes, ['已作为新皮肤导入「QA包装（2）」，旧版本保留。']);
+  assert.equal(assertive.writes.length, 0, '重命名导入不再走 liveAssert');
 });
 
-test('提交时才发现内容已存在：显示「已经导入过」并提供切换按钮', async () => {
+test('同名不同 sourceId（kind=name）用「原有同名皮肤保留」文案并带回 duplicate.kind', async () => {
+  const f = fixture();
+  f.get('settings-notice').hidden = true;
+  const polite = liveRecorder(f, 'settings-live');
+  const assertive = liveRecorder(f, 'settings-live-assertive');
+  f.api.previewSkinPack = async () => freshPreview({
+    installedName: 'QA包装（4）',
+    duplicate: { kind: 'name', existingName: 'QA包装', existingId: 'other', switchTo: '' }
+  });
+  await f.window.__settingsTest.previewToken('2'.repeat(32));
+  polite.writes.length = 0;
+  f.api.commitResult = {
+    ok: true, reused: false, renamed: true, switchTo: '',
+    duplicate: { kind: 'name', existingName: 'QA包装', existingId: 'other' },
+    pack: { id: '3'.repeat(64), name: 'QA包装（4）', characterCount: 1 }
+  };
+  await f.window.__settingsTest.submitZip();
+  assert.equal(f.get('settings-notice-text').textContent, '已作为新皮肤导入「QA包装（4）」，原有同名皮肤保留。');
+  assert.deepEqual(polite.writes, ['已作为新皮肤导入「QA包装（4）」，原有同名皮肤保留。']);
+  assert.equal(assertive.writes.length, 0);
+  assert.equal(f.doc.activeElement, f.get('settings-zip-drop'));
+  assert.match(source, /result\.duplicate\?\.kind === 'name'/);
+});
+
+test('提交时才发现内容已存在：显示「已经导入过」，焦点在「切换到它」', async () => {
   const f = fixture();
   const switchTo = `pack:${'e'.repeat(64)}:whale`;
-  f.api.previewSkinPack = async () => ({
-    ok: true, name: 'QA包装', installedName: 'QA包装', version: '1.0.0', sourceId: 'qa-pack',
-    reused: false, switchTo: '', duplicate: null, totalBytes: 0, characterCount: 1, characters: []
-  });
+  seedSkins(f, ['default', switchTo]);
+  f.get('settings-notice').hidden = true;
+  const polite = liveRecorder(f, 'settings-live');
+  f.api.previewSkinPack = async () => freshPreview();
   await f.window.__settingsTest.previewToken('f'.repeat(32));
+  assert.equal(f.doc.activeElement, f.get('settings-zip-confirm'));
+  polite.writes.length = 0;
   f.api.commitResult = {
     ok: true, reused: true, renamed: false, switchTo,
+    duplicate: { kind: 'content', existingName: 'QA包装', existingId: 'e'.repeat(64) },
     pack: { id: 'e'.repeat(64), name: 'QA包装', characterCount: 1 }
   };
   await f.window.__settingsTest.submitZip();
-  assert.match(f.get('settings-notice-text').textContent, /这个皮肤包已经导入过/);
+  assert.equal(f.get('settings-notice-text').textContent, '这个皮肤包已经导入过。可以切换到「QA包装」。');
   const action = f.get('settings-notice-action');
   assert.equal(action.hidden, false);
   assert.equal(action.textContent, '切换到它');
+  assert.equal(f.doc.activeElement, action, '带「切换到它」的提示把焦点放在该按钮');
+  assert.deepEqual(polite.writes, ['这个皮肤包已经导入过。可以切换到「QA包装」。']);
   action.emit('click');
   assert.equal(f.api.skinId, switchTo);
   assert.equal(f.get('settings-notice').hidden, true);
+  assert.equal(f.doc.activeElement, skinCard(f, switchTo), '动作按钮切皮肤后焦点落在对应皮肤卡片');
+  assert.equal(polite.writes.at(-1), '已切换到「QA包装」。');
+});
+
+test('内容相同但没有切换目标：提交后提示给「知道了」，焦点在拖拽区', async () => {
+  const f = fixture();
+  f.get('settings-notice').hidden = true;
+  f.api.previewSkinPack = async () => freshPreview();
+  await f.window.__settingsTest.previewToken('4'.repeat(32));
+  f.api.commitResult = {
+    ok: true, reused: true, renamed: false, switchTo: '',
+    duplicate: { kind: 'content', existingName: 'QA包装' },
+    pack: { id: '5'.repeat(64), name: 'QA包装', characterCount: 1 }
+  };
+  await f.window.__settingsTest.submitZip();
+  const action = f.get('settings-notice-action');
+  assert.equal(action.hidden, false);
+  assert.equal(action.textContent, '知道了');
+  assert.equal(f.doc.activeElement, f.get('settings-zip-drop'), '没有「切换到它」时焦点回拖拽区');
+});
+
+test('提示关闭：「关闭」按钮、Esc、动作按钮都会把焦点放回拖拽区', async () => {
+  const f = fixture();
+  seedSkins(f, ['default']);
+  f.get('settings-notice').hidden = true;
+  f.api.previewSkinPack = async () => freshPreview();
+  const open = async () => {
+    f.api.previewSkinPack = async () => freshPreview({
+      duplicate: { kind: 'sourceId', existingName: 'QA包装', existingId: 'old', switchTo: '' }
+    });
+    await f.window.__settingsTest.previewToken('6'.repeat(32));
+    f.api.commitResult = {
+      ok: true, reused: false, renamed: true, switchTo: '',
+      duplicate: { kind: 'sourceId', existingName: 'QA包装', existingId: 'old' },
+      pack: { id: '7'.repeat(64), name: 'QA包装（2）', characterCount: 1 }
+    };
+    await f.window.__settingsTest.submitZip();
+    assert.equal(f.get('settings-notice').hidden, false);
+  };
+  // 「关闭」按钮
+  await open();
+  f.get('settings-notice-close').emit('click');
+  assert.equal(f.get('settings-notice').hidden, true);
+  assert.equal(f.doc.activeElement, f.get('settings-zip-drop'));
+  // Esc 关闭提示，不关窗
+  f.api.commitResult = { ok: true, reused: true, renamed: false, switchTo: '', duplicate: { kind: 'content', existingName: 'QA包装' }, pack: { id: '8'.repeat(64), name: 'QA包装', characterCount: 1 } };
+  await f.window.__settingsTest.previewToken('9'.repeat(32));
+  await f.window.__settingsTest.submitZip();
+  assert.equal(f.get('settings-notice').hidden, false);
+  f.emitWindow('keydown', { key: 'Escape' });
+  assert.equal(f.get('settings-notice').hidden, true, 'Esc 先关提示');
+  assert.equal(f.api.closed, false, 'Esc 关提示时不能关窗');
+  assert.equal(f.doc.activeElement, f.get('settings-zip-drop'));
+  // 第二次 Esc 才走关窗
+  f.emitWindow('keydown', { key: 'Escape' });
+  assert.equal(f.api.closed, true);
+});
+
+test('提示不再是 live region：重复播报只走 polite #settings-live', () => {
+  const html = fs.readFileSync(path.join(root, 'src', 'settings.html'), 'utf8');
+  const notice = html.match(/<div id="settings-notice"[^>]*>/);
+  assert.ok(notice);
+  assert.doesNotMatch(notice[0], /role="(status|alert)"/);
+  assert.doesNotMatch(notice[0], /aria-live/);
+  assert.doesNotMatch(notice[0], /aria-atomic/);
+  assert.match(html, /id="settings-live"[^>]*role="status"[^>]*aria-live="polite"/);
+  // liveAssert 只留给 PACK_CHANGED 和错误。
+  assert.doesNotMatch(source, /liveAssert\(`这个皮肤包已经导入过/);
+  assert.doesNotMatch(source, /liveAssert\(`已作为新皮肤导入/);
+  assert.match(source, /PACK_CHANGED[\s\S]*?liveAssert\(/);
+  assert.match(source, /function rejectPack[\s\S]*?liveAssert\(/);
 });
 
 test('导入 UI 已移除 PACK_CONFIRM 覆盖确认流程', () => {
   assert.doesNotMatch(source, /PACK_CONFIRM|needsConfirm|acceptSameName|确认并导入/);
   assert.match(source, /这个皮肤包已经导入过/);
-  assert.match(source, /已作为新皮肤导入，旧版本保留/);
+  assert.match(source, /已作为新皮肤导入/);
+  assert.match(source, /旧版本保留/);
+  assert.match(source, /原有同名皮肤保留/);
   const html = fs.readFileSync(path.join(root, 'src', 'settings.html'), 'utf8');
   assert.match(html, /id="settings-notice"/);
   assert.match(html, /id="settings-notice-action"/);

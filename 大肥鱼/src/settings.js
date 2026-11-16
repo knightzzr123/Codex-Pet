@@ -3,6 +3,10 @@ let state = {};
 let settingsReturnFocus = null;
 let pendingToken = '';
 let currentPreview = null;
+// Z-5: switching a skin is confirmed by the main process asynchronously, so the
+// skin card that should take focus may only exist after the next state push.
+let pendingSkinFocus = null;
+let noticeVisible = false;
 
 function nodes(root, selector) {
   if (!root || typeof root.querySelectorAll !== 'function') return [];
@@ -70,6 +74,8 @@ function syncSettingsControls() {
       button.type = 'button';
       button.className = `settings-skin-card${active ? ' is-active' : ''}`;
       button.title = label;
+      // The card is the focus target after a successful Z-5 switch.
+      button.setAttribute?.('data-skin-id', skin.id);
       button.setAttribute?.('role', 'radio');
       button.setAttribute?.('aria-checked', String(active));
       button.setAttribute?.('aria-pressed', String(active));
@@ -96,6 +102,15 @@ function syncSettingsControls() {
       button.addEventListener('click', () => window.settingsAPI?.setSkin?.(skin.id));
       return button;
     }));
+  }
+  // Z-5: the switch result arrives after the state push, so the pending target
+  // is resolved here, once the rebuilt cards exist. A still-connected card is
+  // left alone, so an unrelated later state push never steals focus.
+  if (pendingSkinFocus) {
+    const pending = pendingSkinFocus;
+    pendingSkinFocus = null;
+    const replaced = !pending.node || pending.node.isConnected === false;
+    if (replaced && !focusSkinCard(pending.id)) focusDrop();
   }
   const sizeBox = $('settings-size');
   if (sizeBox && !sizeBox.childElementCount && typeof sizeBox.append === 'function') {
@@ -184,18 +199,20 @@ function showPreview(preview) {
   const warning = $('settings-zip-preview-warning');
   const duplicate = preview?.duplicate;
   const reused = preview?.reused === true;
+  const switchTo = preview?.switchTo || duplicate?.switchTo || '';
   if (warning) {
     warning.hidden = !duplicate;
     if (reused) {
       warning.textContent = `这个皮肤包已经导入过（「${duplicate.existingName || preview.name}」）。不会再导入一份，可以切换到它。`;
     } else if (duplicate?.kind === 'sourceId') {
-      warning.textContent = `已有同 ID 的旧版本「${duplicate.existingName}」。将另存为「${finalName}」，旧版本保留。`;
+      warning.textContent = `已有这个皮肤包的另一个版本「${duplicate.existingName}」。将导入为「${finalName}」，旧版本保留。`;
     } else if (duplicate?.kind === 'name') {
       warning.textContent = `已有同名皮肤包「${duplicate.existingName}」。将另存为「${finalName}」，旧包不会被覆盖。`;
     } else warning.textContent = '';
   }
   const confirm = $('settings-zip-confirm');
-  if (confirm) confirm.textContent = reused ? '切换到它' : '导入';
+  // Z-5: nothing to switch to when the identical pack has no character link.
+  if (confirm) confirm.textContent = reused ? (switchTo ? '切换到它' : '知道了') : '导入';
   const list = $('settings-zip-preview-characters');
   if (list && typeof list.replaceChildren === 'function' && typeof document.createElement === 'function') {
     list.replaceChildren(...(preview?.characters || []).slice(0, 12).map(character => {
@@ -238,10 +255,44 @@ function formatBytes(bytes) {
 function live(message) { const node = $('settings-live'); if (node) node.textContent = message || ''; }
 function liveAssert(message) { const node = $('settings-live-assertive'); if (node) node.textContent = message || ''; }
 
+// Z-5 focus: hiding the preview or the toast must never leave focus on <body>.
+function focusDrop() {
+  $('settings-zip-drop')?.focus?.({ preventScroll: true });
+}
+
+function skinCardFor(id) {
+  const box = $('settings-skins');
+  if (!box || !id) return null;
+  const cards = [];
+  try { cards.push(...Array.from(box.children || [])); } catch { /* not indexable */ }
+  for (const selector of ['.settings-skin-card', '[data-skin-id]']) {
+    for (const node of nodes(box, selector)) if (!cards.includes(node)) cards.push(node);
+  }
+  return cards.find(node => node?.getAttribute?.('data-skin-id') === id) || null;
+}
+
+function focusSkinCard(id) {
+  const card = skinCardFor(id);
+  if (!card || typeof card.focus !== 'function') return false;
+  card.focus({ preventScroll: true });
+  return true;
+}
+
 let noticeTimer = null;
 let noticeAction = null;
 
-function hideNotice() {
+function noticeHasFocus() {
+  const box = $('settings-notice');
+  const active = typeof document !== 'undefined' ? document.activeElement : null;
+  if (!box || !active) return false;
+  if (typeof box.contains === 'function') return box.contains(active) === true;
+  return active === $('settings-notice-action') || active === $('settings-notice-close');
+}
+
+function hideNotice(options = {}) {
+  const wasVisible = noticeVisible;
+  const hadFocus = wasVisible && noticeHasFocus();
+  noticeVisible = false;
   if (noticeTimer && typeof clearTimeout === 'function') clearTimeout(noticeTimer);
   noticeTimer = null;
   noticeAction = null;
@@ -251,10 +302,14 @@ function hideNotice() {
   if (text) text.textContent = '';
   const button = $('settings-notice-action');
   if (button) { button.hidden = true; button.textContent = ''; }
+  // Closing must return focus to the drop zone; the 8 s auto-dismiss only does
+  // it when focus was actually inside the toast, so it never steals focus.
+  if (wasVisible && (options.focus !== false || hadFocus)) focusDrop();
 }
 
 // A non-blocking toast. An action keeps it open until the user dismisses it or
-// follows it; purely informational notices disappear on their own.
+// follows it; purely informational notices disappear on their own. The toast is
+// not a live region any more: one polite sentence per result goes to #settings-live.
 function showNotice(message, action = null) {
   const box = $('settings-notice');
   if (!box) return;
@@ -267,10 +322,14 @@ function showNotice(message, action = null) {
     button.textContent = noticeAction ? (action.label || '切换到它') : '';
   }
   box.hidden = false;
+  noticeVisible = true;
   if (noticeTimer && typeof clearTimeout === 'function') clearTimeout(noticeTimer);
   noticeTimer = null;
-  if (!noticeAction && typeof setTimeout === 'function') {
-    noticeTimer = setTimeout(() => { noticeTimer = null; hideNotice(); }, 8000);
+  if (noticeAction) {
+    // "切换到它" is the follow-up action, so it takes focus when it appears.
+    if (action.focus !== false) button?.focus?.({ preventScroll: true });
+  } else if (typeof setTimeout === 'function') {
+    noticeTimer = setTimeout(() => { noticeTimer = null; hideNotice({ focus: false }); }, 8000);
     // Do not keep a smoke-test event loop alive just for the toast timer.
     if (noticeTimer && typeof noticeTimer.unref === 'function') noticeTimer.unref();
   }
@@ -328,6 +387,8 @@ function rejectPack(result) {
 
 async function previewToken(token) {
   if (!token || !window.settingsAPI?.previewSkinPack) return;
+  // A new preview replaces the previous result toast instead of stacking it.
+  if (noticeVisible) hideNotice({ focus: false });
   pendingToken = token;
   setDropState('busy');
   setStatus('正在读取皮肤包…');
@@ -339,7 +400,16 @@ async function previewToken(token) {
     }
     showPreview(preview);
     setDropState('preview');
-    live(`皮肤包「${preview.name || ''}」已就绪，请确认导入`);
+    // The drop zone is hidden while the preview is open, so focus follows the
+    // preview's primary action instead of falling back to <body>.
+    $('settings-zip-confirm')?.focus?.({ preventScroll: true });
+    if (preview.reused) {
+      // Z-5: identical content is a "you already have this" result, announced
+      // once with the switch hint instead of the generic ready message.
+      const switchTo = preview.switchTo || preview.duplicate?.switchTo || '';
+      const existingName = preview.duplicate?.existingName || preview.name || '';
+      live(switchTo ? `这个皮肤包已经导入过。可以切换到「${existingName}」。` : '这个皮肤包已经导入过。');
+    } else live(`皮肤包「${preview.name || ''}」已就绪，请确认导入`);
     setStatus('');
   } catch (error) {
     setDropState('error', error?.message || '无法预览这个皮肤包。');
@@ -365,26 +435,33 @@ function switchToPack(switchTo, name) {
   const message = name ? `已切换到「${name}」。` : '已切换到这个皮肤包。';
   setStatus(message);
   live(message);
+  // Z-5 focus: the switched skin's card takes focus; if the state push has not
+  // rebuilt it yet, focusSkinCard runs again from syncSettingsControls.
+  const card = switchTo ? skinCardFor(switchTo) : null;
+  pendingSkinFocus = switchTo ? { id: switchTo, node: card } : null;
+  if (card && typeof card.focus === 'function') card.focus({ preventScroll: true });
+  else focusDrop();
 }
 
 async function submitZip() {
   if (importingZip || !pendingToken || !window.settingsAPI?.commitSkinPack) return;
-  if (currentPreview?.reused) {
+  const preview = currentPreview;
+  if (preview?.reused) {
     // Identical content is already installed: never write a second copy. The
     // preview's primary action is "switch to it" instead of an import.
-    const switchTo = currentPreview.switchTo || currentPreview.duplicate?.switchTo || '';
-    const existingName = currentPreview.duplicate?.existingName || currentPreview.name || '';
+    const switchTo = preview.switchTo || preview.duplicate?.switchTo || '';
+    const existingName = preview.duplicate?.existingName || preview.name || '';
     if (pendingToken) await window.settingsAPI?.cancelSkinPack?.(pendingToken);
     clearPreview();
     if (switchTo) {
-      switchToPack(switchTo, existingName);
       setDropState('success', `这个皮肤包已经导入过，已切换到「${existingName}」。`);
-      liveAssert(`这个皮肤包已经导入过。已切换到「${existingName}」。`);
+      switchToPack(switchTo, existingName);
       return;
     }
+    // Nothing to switch to: the preview said 知道了, so only acknowledge.
     setDropState('success', '这个皮肤包已经导入过，没有重复导入。');
-    showNotice('这个皮肤包已经导入过。');
-    liveAssert('这个皮肤包已经导入过。');
+    setStatus('');
+    focusDrop();
     return;
   }
   importingZip = true;
@@ -395,6 +472,7 @@ async function submitZip() {
       clearPreview();
       setDropState('error', result.error || '皮肤包在预览之后被改过，请重新选择。');
       liveAssert(result.error || '皮肤包在预览之后被改过，请重新选择。');
+      focusDrop();
       return;
     }
     if (!result?.ok) {
@@ -404,31 +482,37 @@ async function submitZip() {
     const name = result.pack?.name || '';
     if (result.reused) {
       const switchTo = result.switchTo || '';
-      const done = '这个皮肤包已经导入过，没有重复导入。';
+      const existingName = result.duplicate?.existingName || name;
+      const done = switchTo
+        ? `这个皮肤包已经导入过。可以切换到「${existingName}」。`
+        : '这个皮肤包已经导入过。';
       setStatus(done);
       live(done);
       clearPreview();
       setDropState('success', done);
-      showNotice('这个皮肤包已经导入过。', switchTo ? {
-        label: '切换到它',
-        run: () => {
-          switchToPack(switchTo, name);
-          setStatus(`已切换到「${name}」。`);
-        }
-      } : null);
+      // A toast with 切换到它 puts focus on that button; without a switch target
+      // the result is just acknowledged and focus returns to the drop zone.
+      showNotice(done, switchTo
+        ? { label: '切换到它', run: () => switchToPack(switchTo, existingName) }
+        : { label: '知道了', run: () => focusDrop(), focus: false });
+      if (!switchTo) focusDrop();
       return;
     }
-    const done = name ? `已导入皮肤包「${name}」。` : '皮肤包已导入。';
+    const renamed = result.renamed === true;
+    // Z-5: a different version of the same pack is kept as a new skin; the old
+    // version stays installed and nothing is interrupted by a modal. Same-name
+    // packs (different sourceId) keep the existing same-named skin instead.
+    const done = renamed
+      ? (result.duplicate?.kind === 'name'
+        ? `已作为新皮肤导入「${name}」，原有同名皮肤保留。`
+        : `已作为新皮肤导入「${name}」，旧版本保留。`)
+      : (name ? `已导入皮肤包「${name}」。` : '皮肤包已导入。');
     setStatus(done);
     live(done);
     clearPreview();
     setDropState('success', done);
-    if (result.renamed) {
-      // Z-5: a different version of the same pack is kept as a new skin; the
-      // old version stays installed and nothing is interrupted by a modal.
-      showNotice('已作为新皮肤导入，旧版本保留。');
-      liveAssert(`已作为新皮肤导入「${name}」，旧版本保留。`);
-    }
+    focusDrop();
+    if (renamed) showNotice(done);
   } finally {
     importingZip = false;
   }
@@ -597,6 +681,12 @@ function bindStaticControls() {
   window.addEventListener?.('keydown', async event => {
     if (event.key !== 'Escape') return;
     event.preventDefault();
+    // Z-5: while the toast is open, Esc dismisses it (focus returns to the drop
+    // zone) before it cancels a preview or closes the window.
+    if (noticeVisible) {
+      hideNotice();
+      return;
+    }
     if (pendingToken) {
       await window.settingsAPI?.cancelSkinPack?.(pendingToken);
       clearPreview();
@@ -662,6 +752,6 @@ boot();
 if (typeof window !== 'undefined') {
   window.__settingsTest = {
     selectCategory, showPreview, clearPreview, applyState, focusClose,
-    previewToken, showNotice, hideNotice, submitZip, switchToPack
+    previewToken, showNotice, hideNotice, submitZip, switchToPack, focusDrop, focusSkinCard
   };
 }

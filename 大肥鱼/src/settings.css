@@ -273,7 +273,13 @@ button:focus-visible, input:focus-visible, .settings-drop:focus-visible {
 .settings-drop[data-state="busy"] { opacity: .7; }
 .settings-drop[data-state="error"] { border-color: var(--color-danger); color: var(--color-danger); }
 body.reduced-motion .settings-app, body.reduced-motion .settings-tab, body.reduced-motion .settings-switch-ui::after { transition: none !important; }
-.settings-live:empty { display: none; }
+/* Screen-reader only: an announcement must never leak into the visible layout.
+   The regions stay rendered (not display:none) so screen readers keep announcing. */
+.settings-live {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+  overflow: hidden; white-space: nowrap; border: 0;
+  clip: rect(0 0 0 0); clip-path: inset(50%);
+}
 @media (prefers-reduced-motion: reduce) {
   .settings-app, .settings-tab, .settings-switch-ui::after { transition: none !important; }
 }
