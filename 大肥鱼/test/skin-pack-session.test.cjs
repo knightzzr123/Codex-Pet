@@ -315,6 +315,10 @@ test('相同内容不重复导入，返回切换到它的目标且不自动切�
   assert.equal(committed.reused, true);
   assert.equal(committed.renamed, false);
   assert.equal(committed.switchTo, `pack:${installedId}:whale`);
+  // Z-5: the settings window words the result from the commit duplicate kind.
+  assert.equal(committed.duplicate.kind, 'content');
+  assert.equal(committed.duplicate.existingId, installedId);
+  assert.equal(committed.duplicate.existingName, '重复包');
   assert.equal(committed.pack.id, installedId);
   assert.equal(library.list().length, 1);
   assert.equal(imported.length, 1, 'identical content must not switch the pet silently');
@@ -349,6 +353,8 @@ test('同 sourceId 或同名的不同内容另存为（2）（3），旧包原�
   assert.equal(second.preview.duplicate.kind, 'sourceId');
   assert.equal(second.preview.installedName, 'QA包装（2）');
   assert.equal(second.committed.renamed, true);
+  assert.equal(second.committed.duplicate.kind, 'sourceId');
+  assert.equal(second.committed.duplicate.existingId, oldId);
   assert.equal(second.committed.pack.name, 'QA包装（2）');
   assert.notEqual(second.committed.pack.id, oldId);
   assert.equal(library.list().length, 2);
@@ -362,6 +368,7 @@ test('同 sourceId 或同名的不同内容另存为（2）（3），旧包原�
   const otherSource = await importPack(writePack(root, 4, 'QA包装', { id: 'other-pack' }));
   assert.equal(otherSource.preview.duplicate.kind, 'name');
   assert.equal(otherSource.preview.installedName, 'QA包装（4）');
+  assert.equal(otherSource.committed.duplicate.kind, 'name');
   assert.equal(otherSource.committed.pack.name, 'QA包装（4）');
   assert.equal(library.list().length, 4);
 

@@ -224,6 +224,16 @@ function createSkinPackSession(options = {}) {
       const pack = await library.importDirectory(importDir, validateImage);
       const reused = pack.reused === true;
       const renamed = !reused && pack.name !== again.manifest.name;
+      // Z-5: the settings window needs the duplicate kind ('content' | 'sourceId'
+      // | 'name') with the commit result to word the result announcement; a
+      // freshly installed pack does not carry it, so it comes from the re-check.
+      const duplicate = again.duplicate
+        ? {
+          kind: again.duplicate.kind,
+          existingName: again.duplicate.existingName || '',
+          existingId: again.duplicate.existingId || ''
+        }
+        : null;
       drop(token);
       // Identical content is never written twice and never switched silently;
       // the settings window offers a "switch to it" action instead.
@@ -234,7 +244,8 @@ function createSkinPackSession(options = {}) {
         ok: true,
         reused,
         renamed,
-        switchTo: reused ? (pack.duplicate?.switchTo || firstCharacterLink(pack) || '') : '',
+        switchTo: reused ? (pack.duplicate?.switchTo || again.duplicate?.switchTo || firstCharacterLink(pack) || '') : '',
+        duplicate,
         pack: {
           id: pack.id,
           name: pack.name,
