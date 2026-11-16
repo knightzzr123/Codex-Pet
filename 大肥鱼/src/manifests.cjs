@@ -24,8 +24,14 @@ const SKIN_PACK_LIMITS = Object.freeze({
   // Folder imports no longer walk the selected tree. Only the manifest and the
   // files it references are lstat'ed (each path segment), and this cap counts
   // those checked paths so a pathological manifest still has a bounded cost.
-  maxFolderEntries: 2000
+  maxReferencedPathSegments: 256
 });
+
+// One wording for both the folder check and the session fallback; the number
+// comes from the constant so it never drifts from the enforced limit.
+function referencedPathLimitMessage(limit = SKIN_PACK_LIMITS.maxReferencedPathSegments) {
+  return `皮肤包引用的文件或目录路径超过 ${limit} 个，已拒绝导入；请只选择包含 manifest.json 和角色图片的文件夹。`;
+}
 
 const SLUG_PATTERN = /^[a-z0-9][a-z0-9_-]{0,39}$/i;
 
@@ -57,6 +63,7 @@ module.exports = {
   PREFERENCES_BUNDLE_KIND,
   THUMBNAIL_SPEC,
   SKIN_PACK_LIMITS,
+  referencedPathLimitMessage,
   SLUG_PATTERN,
   assertManifestVersion,
   assertSlug,

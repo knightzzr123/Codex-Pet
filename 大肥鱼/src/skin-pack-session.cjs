@@ -3,22 +3,42 @@ const path = require('node:path');
 const { randomBytes, randomUUID } = require('node:crypto');
 const { ZIP_LIMITS, writeEntries } = require('./zip-reader.cjs');
 const { findManifestDirectory, firstCharacterLink } = require('./skin-packs.cjs');
+const { referencedPathLimitMessage } = require('./manifests.cjs');
 
 const TOKEN_TTL_MS = 10 * 60 * 1000;
 const MAX_TOKENS = 4;
 
+// One wording for a damaged or unsupported archive. The technical detail stays
+// in the diagnostic log so the settings window never shows an English parser
+// message, a CRC byte count or another implementation detail.
+const DAMAGED_ARCHIVE = '压缩包已损坏或格式不受支持，请重新打包后再试。';
+
 const MESSAGES = Object.freeze({
   PATH_REJECTED: '只能导入 .zip 或皮肤包文件夹。',
   ZIP_SYMLINK: '不接受符号链接。',
-  ZIP_LIMIT: '压缩包超过大小上限。',
-  ZIP_ENTRY_LIMIT: '皮肤包文件夹里的文件或目录太多，已拒绝导入。',
+  ZIP_LIMIT: '压缩包超过大小上限，请减小图片后再试。',
+  ZIP_ENTRY_LIMIT: referencedPathLimitMessage(),
+  ZIP_ACCESS: '没有权限读取皮肤包里的文件。',
   ZIP_SENDER: '只有设置窗口可以导入皮肤包。',
   TOKEN_INVALID: '这个导入凭证无效、已过期或已使用。',
   PACK_CHANGED: '皮肤包在预览之后被改过，请重新选择。',
-  ZIP_FORMAT: '无法读取这个皮肤包。'
+  ZIP_HEADER: DAMAGED_ARCHIVE,
+  ZIP_CRC: DAMAGED_ARCHIVE,
+  ZIP_FORMAT: DAMAGED_ARCHIVE
 });
 
+// Codes whose details are never handed to the renderer.
+const OPAQUE_CODES = new Set(['ZIP_HEADER', 'ZIP_CRC', 'ZIP_FORMAT']);
+
+function limitMessage(detail) {
+  const base = detail || MESSAGES.ZIP_LIMIT;
+  if (base.includes('请减小图片')) return base;
+  return `${base.replace(/[。.]?$/, '。')}请减小图片后再试。`;
+}
+
 function fail(code, error) {
+  if (OPAQUE_CODES.has(code)) return { ok: false, code, error: MESSAGES[code] };
+  if (code === 'ZIP_LIMIT') return { ok: false, code, error: limitMessage(error) };
   return { ok: false, code, error: error || MESSAGES[code] || MESSAGES.ZIP_FORMAT };
 }
 
@@ -81,8 +101,30 @@ function createSkinPackSession(options = {}) {
   const maxTokens = options.maxTokens ?? MAX_TOKENS;
   const validateImage = options.validateImage || (async () => {});
   const onImported = options.onImported || (() => {});
+  // Technical details never reach the renderer. They are appended to the
+  // diagnostic stream (lifecycle log in the packaged app) instead.
+  const onDiagnostic = typeof options.onDiagnostic === 'function'
+    ? options.onDiagnostic
+    : entry => {
+      try { console.error('皮肤包导入诊断：' + JSON.stringify(entry)); }
+      catch { /* logging must not change the import result */ }
+    };
   const tokens = new Map();
   let order = 0;
+
+  function errorCode(error, fallback = 'ZIP_FORMAT') {
+    const code = typeof error?.code === 'string' ? error.code : fallback;
+    return code.startsWith('ZIP_') || code === 'PACK_CHANGED' ? code : fallback;
+  }
+
+  function report(error, fallback = 'ZIP_FORMAT') {
+    const code = errorCode(error, fallback);
+    if (OPAQUE_CODES.has(code)) {
+      try { onDiagnostic({ event: 'skin-pack-error', code, detail: error?.message || '' }); }
+      catch { /* diagnostics must never block the result */ }
+    }
+    return code;
+  }
 
   function drop(token) {
     const record = tokens.get(token);
@@ -186,9 +228,7 @@ function createSkinPackSession(options = {}) {
       return { ok: true, ...record.preview };
     } catch (error) {
       drop(record.token);
-      const code = typeof error.code === 'string' && (error.code.startsWith('ZIP_') || error.code === 'PACK_CHANGED')
-        ? error.code : 'ZIP_FORMAT';
-      return fail(code, error.message);
+      return fail(report(error), error.message);
     }
   }
 
@@ -201,7 +241,7 @@ function createSkinPackSession(options = {}) {
     try { again = library.identifyDirectory(record.dir); }
     catch (error) {
       drop(token);
-      if (typeof error.code === 'string' && error.code.startsWith('ZIP_')) return fail(error.code, error.message);
+      if (typeof error.code === 'string' && error.code.startsWith('ZIP_')) return fail(report(error), error.message);
       return fail('PACK_CHANGED');
     }
     if (again.id !== record.id) {
@@ -261,8 +301,7 @@ function createSkinPackSession(options = {}) {
     } catch (error) {
       if (record.kind === 'directory' && record.ownsDir) drop(token);
       else record.committing = false;
-      const code = typeof error.code === 'string' ? error.code : 'ZIP_FORMAT';
-      return fail(code, error.message);
+      return fail(report(error), error.message);
     }
   }
 

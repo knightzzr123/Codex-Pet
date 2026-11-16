@@ -63,6 +63,24 @@ function buildZip(entries) {
   return Buffer.concat([...locals, cd, eocd]);
 }
 
+// Flip one byte inside the stored data of a ZIP entry. The central directory
+// still carries the original CRC, so reading the entry fails the CRC check.
+function corruptEntryData(buffer, entryIndex = 0, byteIndex = 0) {
+  let offset = 0;
+  for (let index = 0; index <= entryIndex; index += 1) {
+    const nameLength = buffer.readUInt16LE(offset + 26);
+    const extraLength = buffer.readUInt16LE(offset + 28);
+    const size = buffer.readUInt32LE(offset + 18);
+    const dataStart = offset + 30 + nameLength + extraLength;
+    if (index === entryIndex) {
+      buffer[dataStart + byteIndex] ^= 0xff;
+      return buffer;
+    }
+    offset = dataStart + size;
+  }
+  throw new Error('entry index out of range');
+}
+
 function temporary(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dafeiyu-skin-session-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -102,6 +120,7 @@ function sessionFor(root, extras = {}) {
     library,
     now: () => clock,
     validateImage: async () => {},
+    onDiagnostic: () => {},
     ...extras
   });
   return { library, session, advance: ms => { clock += ms; } };
@@ -540,7 +559,7 @@ test('文件夹预览拒绝指向文件夹外的目录链接，不读取外部�
   assert.deepEqual(unzipNames(library), []);
 });
 
-test('无关子目录远超 2000 个文件时预览和导入仍迅速成功，且不进入该目录', async t => {
+test('无关子目录远超 256 个文件时预览和导入仍迅速成功，且不进入该目录', async t => {
   const root = temporary(t);
   const { library, session } = sessionFor(root);
   const directory = writePack(root, 42, '大目录包', { id: 'many-entries' });
@@ -605,6 +624,87 @@ test('未引用的无权限子目录不影响预览和导入', {
   }
 });
 
+test('顶层无关符号链接不影响文件夹预览和导入', async t => {
+  const root = temporary(t);
+  const { library, session } = sessionFor(root);
+  const directory = writePack(root, 38, '顶层链接包', { id: 'outer-link-pack' });
+  const outside = path.join(root, 'outside-unrelated');
+  fs.mkdirSync(outside);
+  fs.writeFileSync(path.join(outside, 'unrelated.png'), png(39));
+  fs.symlinkSync(outside, path.join(directory, 'linked-unrelated'), 'dir');
+  const registered = session.register(directory, 1);
+  const preview = await session.preview(registered.token, 1);
+  assert.equal(preview.ok, true, preview.error);
+  const committed = await session.commit(registered.token, 1);
+  assert.equal(committed.ok, true, committed.error);
+  assert.equal(library.list().length, 1);
+});
+
+test('损坏的压缩包对用户只显示统一中文提示，技术细节写诊断日志', async t => {
+  const root = temporary(t);
+  const diagnostics = [];
+  const { session } = sessionFor(root, { onDiagnostic: entry => diagnostics.push(entry) });
+  const manifest = Buffer.from(JSON.stringify({
+    manifestVersion: MANIFEST_VERSION, name: '坏包', version: '1.0.0',
+    characters: [{ id: 'whale', name: '鲸鱼', image: 'whale.png' }]
+  }));
+  const file = path.join(root, 'bad-crc.zip');
+  fs.writeFileSync(file, corruptEntryData(buildZip([
+    { name: 'manifest.json', data: manifest },
+    { name: 'whale.png', data: png(40) }
+  ]), 0));
+  const registered = session.register(file, 1);
+  assert.equal(registered.ok, true, registered.error);
+  const preview = await session.preview(registered.token, 1);
+  assert.equal(preview.ok, false);
+  assert.equal(preview.code, 'ZIP_CRC');
+  assert.equal(preview.error, '压缩包已损坏或格式不受支持，请重新打包后再试。');
+  assert.ok(diagnostics.length >= 1);
+  assert.equal(diagnostics[0].code, 'ZIP_CRC');
+  assert.match(diagnostics[0].detail, /CRC/);
+});
+
+test('不是 ZIP 的文件同样只显示统一中文提示', async t => {
+  const root = temporary(t);
+  const diagnostics = [];
+  const { session } = sessionFor(root, { onDiagnostic: entry => diagnostics.push(entry) });
+  const file = path.join(root, 'not-a-zip.zip');
+  fs.writeFileSync(file, 'plain text, not a zip');
+  const registered = session.register(file, 1);
+  const preview = await session.preview(registered.token, 1);
+  assert.equal(preview.ok, false);
+  assert.equal(preview.code, 'ZIP_FORMAT');
+  assert.equal(preview.error, '压缩包已损坏或格式不受支持，请重新打包后再试。');
+  assert.equal(diagnostics.length, 1);
+  assert.equal(diagnostics[0].code, 'ZIP_FORMAT');
+});
+
+test('引用文件所在目录无权限时给 ZIP_ACCESS 中文提示', {
+  skip: process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0)
+}, async t => {
+  const root = temporary(t);
+  const { library, session } = sessionFor(root);
+  const directory = fs.mkdtempSync(path.join(root, 'pack-'));
+  fs.writeFileSync(path.join(directory, 'manifest.json'), JSON.stringify({
+    manifestVersion: MANIFEST_VERSION, name: '权限包', version: '1.0.0',
+    characters: [{ id: 'whale', name: '鲸鱼', image: 'images/whale.png' }]
+  }));
+  const images = path.join(directory, 'images');
+  fs.mkdirSync(images);
+  fs.writeFileSync(path.join(images, 'whale.png'), png(41));
+  fs.chmodSync(images, 0o000);
+  try {
+    const registered = session.register(directory, 1);
+    const preview = await session.preview(registered.token, 1);
+    assert.equal(preview.ok, false);
+    assert.equal(preview.code, 'ZIP_ACCESS');
+    assert.match(preview.error, /没有权限读取皮肤包里的文件/);
+    assert.equal(library.list().length, 0);
+  } finally {
+    fs.chmodSync(images, 0o755);
+  }
+});
+
 test('文件夹总量超过 200 MB 时预览报 ZIP_LIMIT', async t => {
   const root = temporary(t);
   const { library, session } = sessionFor(root);
@@ -625,5 +725,6 @@ test('文件夹总量超过 200 MB 时预览报 ZIP_LIMIT', async t => {
   assert.equal(preview.ok, false);
   assert.equal(preview.code, 'ZIP_LIMIT');
   assert.match(preview.error, /200 MB/);
+  assert.match(preview.error, /请减小图片后再试/);
   assert.equal(library.list().length, 0);
 });

@@ -8,7 +8,7 @@ const {
   SkinPackLibrary, normalizeManifest, validateThumbnail, packCharacterId, parsePackCharacterId,
   findManifestDirectory, assertNoSymlinks
 } = require('../src/skin-packs.cjs');
-const { MANIFEST_VERSION } = require('../src/manifests.cjs');
+const { MANIFEST_VERSION, SKIN_PACK_LIMITS, referencedPathLimitMessage } = require('../src/manifests.cjs');
 
 function png(width, height, seed = 0) {
   const bytes = Buffer.alloc(48);
@@ -172,16 +172,58 @@ test('兼容原有单张图片皮肤：skins 目录与皮肤包目录互不影�
 });
 
 
-test('findManifestDirectory 对顶层符号链接给出 ZIP_SYMLINK', t => {
+test('无关的顶层链接被跳过，不影响正常找到 manifest.json', t => {
   const root = temporary(t);
   const directory = writePack(root, {
     name: '链接包',
     characters: [{ id: 'whale', name: '鲸鱼', image: 'whale.png' }]
   });
   const outside = fs.mkdtempSync(path.join(root, 'outside-'));
+  fs.writeFileSync(path.join(outside, 'unrelated.png'), png(1, 1));
   fs.symlinkSync(outside, path.join(directory, 'linked'), 'dir');
-  assert.throws(() => findManifestDirectory(directory),
-    error => error.code === 'ZIP_SYMLINK' && /符号链接/.test(error.message));
+  assert.equal(findManifestDirectory(directory), directory);
+});
+
+test('manifest.json 所在顶层目录是链接时给出 ZIP_SYMLINK', t => {
+  const root = temporary(t);
+  const wrapper = fs.mkdtempSync(path.join(root, 'wrapper-'));
+  const real = fs.mkdtempSync(path.join(root, 'real-pack-'));
+  fs.writeFileSync(path.join(real, 'manifest.json'), JSON.stringify({ manifestVersion: MANIFEST_VERSION, name: '链接目录包', characters: [] }));
+  fs.symlinkSync(real, path.join(wrapper, 'pack'), 'dir');
+  assert.throws(() => findManifestDirectory(wrapper),
+    error => error.code === 'ZIP_SYMLINK' && /符号链接|目录联接/.test(error.message));
+});
+
+test('顶层 lstat 抛 EBUSY 时跳过该条目，不外抛系统错误', t => {
+  const root = temporary(t);
+  const directory = writePack(root, {
+    name: '占用包',
+    characters: [{ id: 'whale', name: '鲸鱼', image: 'whale.png' }]
+  });
+  const busy = path.join(directory, 'busy-top');
+  fs.mkdirSync(busy);
+  fs.writeFileSync(path.join(busy, 'manifest.json'), '{}');
+  const lstat = fs.lstatSync;
+  t.mock.method(fs, 'lstatSync', function (target, ...args) {
+    if (path.basename(String(target)) === 'busy-top') {
+      throw Object.assign(new Error('resource busy or locked'), { code: 'EBUSY' });
+    }
+    return lstat.call(fs, target, ...args);
+  });
+  assert.equal(findManifestDirectory(directory), directory);
+});
+
+test('误选没有 manifest 的大目录给中文缺少 manifest 提示', t => {
+  const root = temporary(t);
+  const directory = fs.mkdtempSync(path.join(root, 'selected-'));
+  for (let index = 0; index < 300; index += 1) fs.writeFileSync(path.join(directory, `file-${index}.txt`), '');
+  fs.mkdirSync(path.join(directory, 'System Volume Information'));
+  assert.throws(() => findManifestDirectory(directory), error => {
+    assert.ok(typeof error.code === 'string' && error.code.startsWith('ZIP_'), `未分类错误码: ${error.code}`);
+    assert.match(error.message, /没找到 manifest\.json/);
+    assert.doesNotMatch(error.message, /EBUSY|EACCES|EPERM|ENOENT/);
+    return true;
+  });
 });
 
 test('findManifestDirectory 对符号链接的 manifest.json 给出 ZIP_SYMLINK', t => {
@@ -224,6 +266,9 @@ test('assertNoSymlinks 只逐段检查引用路径，按检查过的路径段计
   assert.doesNotThrow(() => assertNoSymlinks(directory, { references, maxEntries: 4 }));
   assert.throws(() => assertNoSymlinks(directory, { references, maxEntries: 3 }),
     error => error.code === 'ZIP_ENTRY_LIMIT' && /3/.test(error.message));
+  assert.equal(SKIN_PACK_LIMITS.maxReferencedPathSegments, 256);
+  assert.equal('maxFolderEntries' in SKIN_PACK_LIMITS, false);
+  assert.match(referencedPathLimitMessage(256), /引用的文件或目录路径超过 256 个/);
 
   fs.renameSync(path.join(directory, 'images', 'deep', 'whale.png'), path.join(directory, 'real.png'));
   fs.symlinkSync(path.join(directory, 'real.png'), path.join(directory, 'images', 'deep', 'whale.png'));

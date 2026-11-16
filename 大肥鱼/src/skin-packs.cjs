@@ -4,7 +4,8 @@ const { createHash, randomUUID } = require('node:crypto');
 const { imageFormat } = require('./skins.cjs');
 const { inspectZipFile, writeEntries } = require('./zip-reader.cjs');
 const {
-  MANIFEST_VERSION, THUMBNAIL_SPEC, SKIN_PACK_LIMITS, assertManifestVersion, assertSlug, optionalText
+  MANIFEST_VERSION, THUMBNAIL_SPEC, SKIN_PACK_LIMITS, assertManifestVersion, assertSlug, optionalText,
+  referencedPathLimitMessage
 } = require('./manifests.cjs');
 
 const FORMATS = Object.freeze({ png: 'image/png', jpg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp' });
@@ -195,57 +196,85 @@ function assertJsonDepth(text, maxDepth = 32) {
 
 function findManifestDirectory(root) {
   const skip = new Set(['__MACOSX', '.DS_Store', 'Thumbs.db']);
-  const top = fs.readdirSync(root).filter(name => !skip.has(name));
+  let names;
+  try { names = fs.readdirSync(root); }
+  catch { throw codedError('没有权限读取皮肤包文件夹。', 'ZIP_ACCESS'); }
+  // Lstat every top-level entry once, up front. A sibling we cannot inspect
+  // (EBUSY, EACCES, a vanished entry, a junction that cannot be resolved) is
+  // simply skipped: it is not the pack, so it must never surface an OS error or
+  // an English message. The path segments that actually lead to manifest.json
+  // are still checked below.
+  const top = [];
+  for (const name of names) {
+    if (skip.has(name)) continue;
+    const full = path.join(root, name);
+    let stat;
+    try { stat = fs.lstatSync(full); }
+    catch { continue; }
+    top.push({ name, full, stat });
+  }
   const found = [];
-  if (top.includes('manifest.json')) {
-    const full = path.join(root, 'manifest.json');
-    const stat = fs.lstatSync(full);
-    if (stat.isSymbolicLink()) throw codedError('皮肤包里包含符号链接。', 'ZIP_SYMLINK');
-    if (stat.isFile()) found.push(root);
+  const manifestEntry = top.find(item => item.name === 'manifest.json');
+  if (manifestEntry) {
+    if (manifestEntry.stat.isSymbolicLink()) {
+      throw codedError('皮肤包里的 manifest.json 不能是符号链接或目录联接。', 'ZIP_SYMLINK');
+    }
+    if (manifestEntry.stat.isFile()) found.push(root);
   }
   // Only the selected root and its direct children are examined: a pack lives
   // at the root or in its single top-level directory. Subdirectories are never
   // entered here, so an unreadable or huge sibling cannot fail or stall preview.
-  for (const name of top) {
-    if (name === 'manifest.json') continue;
-    const full = path.join(root, name);
-    const stat = fs.lstatSync(full);
-    if (stat.isSymbolicLink()) throw codedError('皮肤包里包含符号链接。', 'ZIP_SYMLINK');
-    if (!stat.isDirectory()) continue;
+  for (const item of top) {
+    if (item.name === 'manifest.json') continue;
+    if (item.stat.isSymbolicLink()) {
+      // An unrelated link/junction is skipped without being followed into the
+      // tree. It is only rejected when it is the directory that holds this
+      // pack's manifest, because then the manifest path itself runs through a
+      // link.
+      let target;
+      try { target = fs.statSync(item.full); } catch { continue; }
+      if (!target.isDirectory()) continue;
+      let nestedStat;
+      try { nestedStat = fs.lstatSync(path.join(item.full, 'manifest.json')); } catch { continue; }
+      if (nestedStat.isSymbolicLink() || nestedStat.isFile()) {
+        throw codedError('皮肤包所在目录不能是符号链接或目录联接。', 'ZIP_SYMLINK');
+      }
+      continue;
+    }
+    if (!item.stat.isDirectory()) continue;
     let nestedStat;
-    try { nestedStat = fs.lstatSync(path.join(full, 'manifest.json')); }
+    try { nestedStat = fs.lstatSync(path.join(item.full, 'manifest.json')); }
     catch { continue; }
-    if (nestedStat.isSymbolicLink()) throw codedError('皮肤包里包含符号链接。', 'ZIP_SYMLINK');
-    if (nestedStat.isFile()) found.push(full);
+    if (nestedStat.isSymbolicLink()) {
+      throw codedError('皮肤包里的 manifest.json 不能是符号链接或目录联接。', 'ZIP_SYMLINK');
+    }
+    if (nestedStat.isFile()) found.push(item.full);
   }
   if (!found.length) {
     // No manifest at an allowed depth. Look one level deeper only to keep the
     // specific "manifest.json 只能放在..." message; every directory read is
-    // guarded, so an unreadable tree still ends in "缺少 manifest.json" instead
-    // of an unclassified permission error.
-    for (const name of top) {
-      if (name === 'manifest.json') continue;
-      const full = path.join(root, name);
+    // guarded, so an unreadable tree still ends in "没找到 manifest.json"
+    // instead of an unclassified permission error.
+    for (const item of top) {
+      if (item.name === 'manifest.json' || !item.stat.isDirectory()) continue;
       let children = [];
-      try { children = fs.readdirSync(full); } catch { continue; }
+      try { children = fs.readdirSync(item.full); } catch { continue; }
       for (const child of children) {
         if (skip.has(child)) continue;
-        const childPath = path.join(full, child);
+        const childPath = path.join(item.full, child);
         let childStat;
         try { childStat = fs.lstatSync(childPath); } catch { continue; }
         if (!childStat.isDirectory()) continue;
         let deeperManifest = null;
         try { deeperManifest = fs.lstatSync(path.join(childPath, 'manifest.json')); } catch { continue; }
         if (deeperManifest.isSymbolicLink() || deeperManifest.isFile()) {
-          const error = new Error('manifest.json 只能放在皮肤包根目录，或唯一一层顶层目录下；图片可按 manifest 的相对路径放在子目录里。');
-          error.code = 'ZIP_MANIFEST_LOCATION';
-          throw error;
+          throw codedError('manifest.json 只能放在皮肤包根目录，或唯一一层顶层目录下；图片可按 manifest 的相对路径放在子目录里。', 'ZIP_MANIFEST_LOCATION');
         }
       }
     }
   }
-  if (!found.length) throw new Error('皮肤包缺少 manifest.json。');
-  if (found.length > 1) throw new Error('皮肤包里有多份 manifest.json。');
+  if (!found.length) throw codedError('没找到 manifest.json；请选择包含 manifest.json 的皮肤包文件夹。', 'ZIP_MANIFEST_MISSING');
+  if (found.length > 1) throw codedError('皮肤包里有多份 manifest.json。', 'ZIP_MANIFEST_MULTIPLE');
   return found[0];
 }
 
@@ -289,7 +318,7 @@ function readPackFile(root, relative, maxBytes, label) {
 // 条目上限只统计真正检查过的路径段/引用文件，不会为了计数去扫描目录树。
 function assertNoSymlinks(root, options = {}) {
   const source = path.resolve(root);
-  const maxPaths = options.maxEntries ?? SKIN_PACK_LIMITS.maxFolderEntries;
+  const maxPaths = options.maxEntries ?? SKIN_PACK_LIMITS.maxReferencedPathSegments;
   const references = Array.isArray(options.references) ? options.references : ['manifest.json'];
   let rootStat;
   try { rootStat = fs.lstatSync(source); }
@@ -311,7 +340,7 @@ function assertNoSymlinks(root, options = {}) {
       checked.add(current);
       count += 1;
       if (count > maxPaths) {
-        throw codedError(`皮肤包引用的文件或目录路径超过 ${maxPaths} 个，已拒绝导入；请只选择包含 manifest.json 和角色图片的文件夹。`, 'ZIP_ENTRY_LIMIT');
+        throw codedError(referencedPathLimitMessage(maxPaths), 'ZIP_ENTRY_LIMIT');
       }
       let stat;
       try { stat = fs.lstatSync(current); }
@@ -319,7 +348,7 @@ function assertNoSymlinks(root, options = {}) {
         if (error.code === 'ENOENT' || error.code === 'ENOTDIR') {
           throw codedError(`皮肤包缺少文件：${reference}`, 'ZIP_FORMAT');
         }
-        throw codedError(`皮肤包文件无法读取：${reference}`, 'ZIP_FORMAT');
+        throw codedError(`没有权限读取皮肤包里的文件：${reference}`, 'ZIP_ACCESS');
       }
       if (stat.isSymbolicLink()) {
         throw codedError(`皮肤包文件夹包含符号链接或目录联接：${path.relative(source, current)}，已拒绝。`, 'ZIP_SYMLINK');
