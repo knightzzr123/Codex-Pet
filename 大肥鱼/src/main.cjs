@@ -364,21 +364,43 @@ else {
     publish();
   }
   async function validateSkinImage(bytes, mime) {
-    const url = `data:${mime};base64,${bytes.toString('base64')}`;
-    const valid = await win.webContents.executeJavaScript(`new Promise(resolve => {
-      const image = new Image();
-      const timer = setTimeout(() => resolve(false), 10000);
-      image.onload = () => {
-        clearTimeout(timer);
-        resolve(image.naturalWidth > 0 && image.naturalHeight > 0);
-      };
-      image.onerror = () => { clearTimeout(timer); resolve(false); };
-      image.src = ${JSON.stringify(url)};
-    })`);
-    if (!valid) {
-      const { userError } = require('./errors.cjs');
-      throw userError('这张图片无法显示，可能已损坏。请换一张图片。');
-    }
+    // Image.onload only waits for the container header, so a PNG with a legal
+    // IHDR but a damaged or truncated IDAT still "loads" and used to be imported
+    // as a blank skin. createImageBitmap decodes the whole bitmap in the
+    // renderer and rejects data that cannot be decoded.
+    const decoding = Promise.resolve()
+      .then(() => win.webContents.executeJavaScript(`(async () => {
+        try {
+          const binary = atob(${JSON.stringify(bytes.toString('base64'))});
+          const data = new Uint8Array(binary.length);
+          for (let i = 0; i < binary.length; i += 1) data[i] = binary.charCodeAt(i);
+          const bitmap = await createImageBitmap(new Blob([data], { type: ${JSON.stringify(mime)} }));
+          const valid = bitmap.width > 0 && bitmap.height > 0;
+          bitmap.close();
+          return valid ? { ok: true } : { ok: false, reason: 'empty' };
+        } catch (error) {
+          return { ok: false, reason: 'decode', name: String(error?.name || ''), detail: String(error?.message || '') };
+        }
+      })()`))
+      .catch(error => ({ ok: false, reason: 'ipc', name: String(error?.name || ''), detail: String(error?.message || '') }));
+    let timer = null;
+    const expired = new Promise(resolve => { timer = setTimeout(() => resolve({ ok: false, reason: 'timeout' }), 10000); });
+    let outcome;
+    try { outcome = await Promise.race([decoding, expired]); }
+    finally { clearTimeout(timer); }
+    if (outcome?.ok) return;
+    const reason = outcome?.reason || 'decode';
+    const code = reason === 'timeout' ? 'SKIN_IMAGE_TIMEOUT'
+      : reason === 'empty' ? 'SKIN_IMAGE_EMPTY'
+        : reason === 'ipc' ? 'SKIN_IMAGE_IPC' : 'SKIN_IMAGE_UNDECODABLE';
+    const technical = reason === 'timeout'
+      ? 'createImageBitmap timed out after 10000 ms'
+      : `${outcome?.name || 'Error'}: ${outcome?.detail || 'image decode failed'}`;
+    // Reuse the lifecycle channel: the settings window only shows the Chinese
+    // sentence, while this entry keeps the renderer's error name and message.
+    logLifecycle({ event: 'skin-pack-error', code, syscall: '', detail: `${technical} (mime=${mime}, bytes=${bytes.length})` });
+    const { userError } = require('./errors.cjs');
+    throw userError('这张图片无法显示，可能已损坏。请换一张图片。');
   }
   async function importSkinFile(file) {
     const skin = await skins.import(file, validateSkinImage);
