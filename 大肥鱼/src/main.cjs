@@ -88,6 +88,11 @@ else {
   const skinPackSession = createSkinPackSession({
     library: skinPacks,
     validateImage: (...args) => validateSkinImage(...args),
+    onDiagnostic(entry) {
+      // D-C4-LOG: the settings window shows only the Chinese copy; keep the
+      // errno, syscall and parser detail in the local lifecycle log.
+      logLifecycle({ event: 'skin-pack-error', code: entry?.code ?? '', syscall: entry?.syscall ?? '', detail: entry?.detail ?? '' });
+    },
     onImported(pack) {
       const first = pack?.characters?.[0];
       if (first) setSkin(packCharacterId(pack.id, first.id));

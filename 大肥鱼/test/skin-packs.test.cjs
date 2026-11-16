@@ -8,7 +8,7 @@ const {
   SkinPackLibrary, normalizeManifest, validateThumbnail, packCharacterId, parsePackCharacterId,
   findManifestDirectory, assertNoSymlinks
 } = require('../src/skin-packs.cjs');
-const { MANIFEST_VERSION, SKIN_PACK_LIMITS, referencedPathLimitMessage } = require('../src/manifests.cjs');
+const { MANIFEST_VERSION, SKIN_PACK_LIMITS, referencedPathLimitMessage, assertManifestVersion } = require('../src/manifests.cjs');
 
 function png(width, height, seed = 0) {
   const bytes = Buffer.alloc(48);
@@ -68,6 +68,24 @@ test('manifest 拒绝缺版本、新版本、越界路径、重复角色与未�
     { ...base, characters: [{ id: 'a', name: 'A', image: 'a.png' }, { id: 'a', name: 'B', image: 'b.png' }] },
     { ...base, store: { version: 2 } }, { ...base, characters: [] }
   ]) assert.throws(() => normalizeManifest(bad));
+});
+
+test('manifestVersion 非数字显示「未知」，数字最多回显 20 个字符', () => {
+  for (const value of ['1', null, {}, true, Number.NaN]) {
+    assert.throws(() => assertManifestVersion(value, '皮肤包清单'), error => {
+      assert.match(error.message, /版本不支持：未知（/);
+      return true;
+    });
+  }
+  const huge = Number.MAX_VALUE;
+  const shown = String(huge).slice(0, 20);
+  assert.ok(shown.length < String(huge).length, '夹具需要超过 20 个字符');
+  assert.throws(() => assertManifestVersion(huge, '皮肤包清单'), error => {
+    assert.ok(error.message.includes(`版本不支持：${shown}（`));
+    assert.equal(error.message.includes(String(huge)), false);
+    return true;
+  });
+  assert.throws(() => assertManifestVersion(undefined, '皮肤包清单'), /版本不支持：缺少版本号/);
 });
 
 test('缩略图规格：正方形 64–256 像素，仅 PNG/JPG/WebP，且不超过 512 KB', () => {

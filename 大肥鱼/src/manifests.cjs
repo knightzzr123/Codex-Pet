@@ -37,9 +37,18 @@ function referencedPathLimitMessage(limit = SKIN_PACK_LIMITS.maxReferencedPathSe
 
 const SLUG_PATTERN = /^[a-z0-9][a-z0-9_-]{0,39}$/i;
 
+// Echoing a malformed manifest value verbatim can print an object, a long
+// JSON snippet or a stack-like string into the settings window. Only a real
+// number is meaningful here; keep at most 20 characters of it.
+function manifestVersionLabel(value) {
+  if (value === undefined) return '缺少版本号';
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '未知';
+  return String(value).slice(0, 20);
+}
+
 function assertManifestVersion(value, label = '清单') {
   if (!Number.isInteger(value) || value !== MANIFEST_VERSION) {
-    throw userError(`${label}版本不支持：${value === undefined ? '缺少版本号' : value}（本版本仅支持 ${MANIFEST_VERSION}）。`);
+    throw userError(`${label}版本不支持：${manifestVersionLabel(value)}（本版本仅支持 ${MANIFEST_VERSION}）。`);
   }
 }
 

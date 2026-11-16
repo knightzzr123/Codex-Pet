@@ -128,7 +128,14 @@ function classifySkinPackPath(filePath, options = {}) {
   if (isRejectedPath(resolved)) return fail('PATH_REJECTED');
   let stat;
   try { stat = fs.lstatSync(resolved); }
-  catch { return fail('PATH_REJECTED'); }
+  catch (error) {
+    // The parent can exist yet deny lstat (EACCES/EPERM). That is an access
+    // problem, not "the selected path is the wrong kind of thing".
+    if (error?.code === 'EACCES' || error?.code === 'EPERM') {
+      return { ok: false, code: 'ZIP_ACCESS', error: MESSAGES.ZIP_ACCESS };
+    }
+    return fail('PATH_REJECTED');
+  }
   if (stat.isSymbolicLink()) return fail('ZIP_SYMLINK');
   if (stat.isDirectory()) return { ok: true, filePath: resolved, kind: 'directory' };
   if (stat.isFile() && resolved.toLowerCase().endsWith('.zip')) {

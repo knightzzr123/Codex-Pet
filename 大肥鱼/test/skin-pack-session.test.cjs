@@ -945,6 +945,7 @@ test('注入的 fs 错误按 errno 归类并写诊断，不显示英文或路径
     assert.equal(preview.error.includes('张三'), false, item.code);
     assert.equal(diagnostics.length, 1, item.code);
     assert.equal(diagnostics[0].code, item.code);
+    assert.equal(diagnostics[0].event, 'skin-pack-error', item.code);
     assert.equal(diagnostics[0].syscall, item.syscall);
     assert.match(diagnostics[0].detail, new RegExp(item.code));
   }
@@ -1061,4 +1062,68 @@ test('会话层导入链路不再直接抛出普通中文 Error（skins.cjs 单�
     const source = fs.readFileSync(path.join(__dirname, '..', 'src', name), 'utf8');
     assert.doesNotMatch(source, /new Error\([^)]*[\u4e00-\u9fff]/u, name);
   }
+});
+
+test('文件夹包的 manifest 不是合法 JSON 时与 ZIP 包显示同一具体原因', async t => {
+  const root = temporary(t);
+  const { session } = sessionFor(root);
+  const directory = writePack(root, 72, '坏 JSON 包');
+  fs.writeFileSync(path.join(directory, 'manifest.json'), '{bad json');
+  const registered = session.register(directory, 1);
+  const preview = await session.preview(registered.token, 1);
+  assert.equal(preview.ok, false);
+  assert.equal(preview.code, 'PACK_INVALID');
+  assert.equal(preview.error, 'manifest.json 无法解析或已损坏。');
+  assert.notEqual(preview.error, '这个皮肤包不符合导入要求，请检查后重试。');
+
+  // The ZIP path parses manifest bytes directly; both routes must read alike.
+  const zip = path.join(root, 'bad-json.zip');
+  fs.writeFileSync(zip, buildZip([
+    { name: 'manifest.json', data: Buffer.from('{bad json') },
+    { name: 'whale.png', data: png(72) }
+  ]));
+  const zipped = session.register(zip, 1);
+  const zipPreview = await session.preview(zipped.token, 1);
+  assert.equal(zipPreview.ok, false);
+  assert.equal(zipPreview.code, 'PACK_INVALID');
+  assert.equal(zipPreview.error, preview.error);
+});
+
+test('登记后文件夹被删除时预览提示「文件夹不存在」，而不是权限问题', async t => {
+  const root = temporary(t);
+  const { session } = sessionFor(root);
+  const directory = writePack(root, 73, '会消失的包');
+  const registered = session.register(directory, 1);
+  assert.equal(registered.ok, true, registered.error);
+  fs.rmSync(directory, { recursive: true, force: true });
+  const preview = await session.preview(registered.token, 1);
+  assert.equal(preview.ok, false);
+  assert.equal(preview.code, 'PACK_INVALID');
+  assert.equal(preview.error, '文件夹不存在，请重新选择皮肤包文件夹。');
+  assert.doesNotMatch(preview.error, /权限/);
+});
+
+test('登记时 lstat 报 EACCES 报 ZIP_ACCESS，而不是「只能导入 .zip 或皮肤包文件夹」', t => {
+  t.mock.method(fs, 'lstatSync', () => {
+    throw Object.assign(new Error('EACCES: permission denied, lstat'), {
+      code: 'EACCES', errno: -13, syscall: 'lstat'
+    });
+  });
+  const result = classifySkinPackPath(path.join(os.tmpdir(), 'locked-skin-pack'));
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'ZIP_ACCESS');
+  assert.equal(result.error, '没有权限读取皮肤包里的文件。');
+  assert.doesNotMatch(result.error, /只能导入/);
+});
+
+test('main.cjs 把皮肤包会话诊断接到生命周期日志（D-C4-LOG）', () => {
+  const main = fs.readFileSync(path.join(__dirname, '..', 'src', 'main.cjs'), 'utf8');
+  const start = main.indexOf('const skinPackSession = createSkinPackSession({');
+  assert.ok(start > 0, '缺少会话创建');
+  const block = main.slice(start, main.indexOf('const dialogueLibrary', start));
+  assert.match(block, /onDiagnostic\(entry\)/);
+  assert.match(block, /event: 'skin-pack-error'/);
+  assert.match(block, /logLifecycle\(/);
+  assert.match(block, /code: entry\?\.code/);
+  assert.match(block, /detail: entry\?\.detail/);
 });

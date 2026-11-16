@@ -133,7 +133,11 @@ function readJsonFile(file, maxBytes) {
   if (stat.isSymbolicLink()) throw codedError('manifest.json 不能是符号链接或目录联接。', 'ZIP_SYMLINK');
   if (!stat.isFile()) throw userError('manifest.json 不是文件。');
   if (stat.size > maxBytes) throw userError('manifest.json 过大。');
-  return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
+  const text = fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '');
+  // Folder packs and ZIP packs must read the same failure the same way; the
+  // ZIP path parses through filesForManifest and has always said this.
+  try { return JSON.parse(text); }
+  catch { throw userError('manifest.json 无法解析或已损坏。'); }
 }
 
 // Every file a pack actually reads: the manifest itself plus each referenced
@@ -197,7 +201,14 @@ function findManifestDirectory(root) {
   const skip = new Set(['__MACOSX', '.DS_Store', 'Thumbs.db']);
   let names;
   try { names = fs.readdirSync(root); }
-  catch { throw codedError('没有权限读取皮肤包文件夹。', 'ZIP_ACCESS'); }
+  catch (error) {
+    // The folder can disappear between registration and preview; that is a
+    // vanished selection, not a permission problem.
+    if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') {
+      throw codedError('文件夹不存在，请重新选择皮肤包文件夹。', 'PACK_INVALID');
+    }
+    throw codedError('没有权限读取皮肤包文件夹。', 'ZIP_ACCESS');
+  }
   // Lstat every top-level entry once, up front. A sibling we cannot inspect
   // (EBUSY, EACCES, a vanished entry, a junction that cannot be resolved) is
   // simply skipped: it is not the pack, so it must never surface an OS error or
