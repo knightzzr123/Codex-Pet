@@ -21,9 +21,9 @@ const SKIN_PACK_LIMITS = Object.freeze({
   maxCharacters: 12,
   maxImageBytes: 20 * 1024 * 1024,
   maxTotalBytes: 200 * 1024 * 1024,
-  // Folder imports walk the selected tree to reject symlinks/junctions before
-  // any image is read. Cap the walk so a pathological tree cannot stall the
-  // settings window; only folders that really are skin packs fit under this.
+  // Folder imports no longer walk the selected tree. Only the manifest and the
+  // files it references are lstat'ed (each path segment), and this cap counts
+  // those checked paths so a pathological manifest still has a bounded cost.
   maxFolderEntries: 2000
 });
 

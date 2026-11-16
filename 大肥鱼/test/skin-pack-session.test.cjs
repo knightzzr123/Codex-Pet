@@ -445,7 +445,7 @@ test('文件夹导入的单图 20 MB 上限仍然生效', async t => {
   assert.equal(library.list().length, 0);
 });
 
-test('文件夹内任意层级的符号链接在预览阶段就拒绝', async t => {
+test('未被 manifest 引用的符号链接不进入检查，预览和导入照常成功', async t => {
   const root = temporary(t);
   const { library, session } = sessionFor(root);
   const directory = writePack(root, 34, '嵌套链接包', { id: 'nested-link-pack' });
@@ -453,13 +453,69 @@ test('文件夹内任意层级的符号链接在预览阶段就拒绝', async t 
   fs.symlinkSync(path.join(directory, 'whale.png'), path.join(directory, 'nested', 'link.png'));
   const registered = session.register(directory, 1);
   const preview = await session.preview(registered.token, 1);
+  assert.equal(preview.ok, true, preview.error);
+  const committed = await session.commit(registered.token, 1);
+  assert.equal(committed.ok, true, committed.error);
+  assert.equal(library.list().length, 1);
+  assert.deepEqual(unzipNames(library), []);
+});
+
+test('引用图片本身是符号链接时预览阶段就拒绝', async t => {
+  const root = temporary(t);
+  const { library, session } = sessionFor(root);
+  const directory = writePack(root, 35, '文件链接包', { id: 'file-link-pack' });
+  const image = path.join(directory, 'whale.png');
+  fs.renameSync(image, path.join(directory, 'real.png'));
+  fs.symlinkSync(path.join(directory, 'real.png'), image);
+  const registered = session.register(directory, 1);
+  assert.equal(registered.ok, true);
+  const preview = await session.preview(registered.token, 1);
   assert.equal(preview.ok, false);
   assert.equal(preview.code, 'ZIP_SYMLINK');
-  assert.match(preview.error, /符号链接/);
+  assert.match(preview.error, /符号链接|目录联接/);
   assert.equal(library.list().length, 0);
   assert.deepEqual(unzipNames(library), []);
   // A failed preview consumes the token, so commit cannot reuse it.
   assert.equal((await session.commit(registered.token, 1)).code, 'TOKEN_INVALID');
+});
+
+test('引用路径的深层父目录是符号链接时预览阶段就拒绝', async t => {
+  const root = temporary(t);
+  const { library, session } = sessionFor(root);
+  const outside = path.join(root, 'outside-deep');
+  fs.mkdirSync(path.join(outside, 'deep'), { recursive: true });
+  fs.writeFileSync(path.join(outside, 'deep', 'whale.png'), png(36));
+  const directory = fs.mkdtempSync(path.join(root, 'pack-'));
+  fs.writeFileSync(path.join(directory, 'manifest.json'), JSON.stringify({
+    manifestVersion: MANIFEST_VERSION, name: '深层链接包', version: '1.0.0',
+    characters: [{ id: 'whale', name: '鲸鱼', image: 'images/deep/whale.png' }]
+  }));
+  fs.mkdirSync(path.join(directory, 'images'));
+  fs.symlinkSync(path.join(outside, 'deep'), path.join(directory, 'images', 'deep'), 'dir');
+  const registered = session.register(directory, 1);
+  assert.equal(registered.ok, true);
+  const preview = await session.preview(registered.token, 1);
+  assert.equal(preview.ok, false);
+  assert.equal(preview.code, 'ZIP_SYMLINK');
+  assert.match(preview.error, /符号链接|目录联接/);
+  assert.equal(library.list().length, 0);
+  assert.deepEqual(unzipNames(library), []);
+});
+
+test('manifest.json 本身是符号链接时预览阶段就拒绝', async t => {
+  const root = temporary(t);
+  const { library, session } = sessionFor(root);
+  const directory = writePack(root, 37, '清单链接包', { id: 'manifest-link-pack' });
+  const manifest = path.join(directory, 'manifest.json');
+  fs.renameSync(manifest, path.join(directory, 'real-manifest.json'));
+  fs.symlinkSync(path.join(directory, 'real-manifest.json'), manifest);
+  const registered = session.register(directory, 1);
+  assert.equal(registered.ok, true);
+  const preview = await session.preview(registered.token, 1);
+  assert.equal(preview.ok, false);
+  assert.equal(preview.code, 'ZIP_SYMLINK');
+  assert.equal(library.list().length, 0);
+  assert.deepEqual(unzipNames(library), []);
 });
 
 test('文件夹预览拒绝指向文件夹外的目录链接，不读取外部图片', async t => {
@@ -484,23 +540,69 @@ test('文件夹预览拒绝指向文件夹外的目录链接，不读取外部�
   assert.deepEqual(unzipNames(library), []);
 });
 
-test('文件夹条目超过 2000 个时在预览阶段拒绝', async t => {
+test('无关子目录远超 2000 个文件时预览和导入仍迅速成功，且不进入该目录', async t => {
   const root = temporary(t);
   const { library, session } = sessionFor(root);
-  const directory = writePack(root, 42, '太多条目', { id: 'many-entries' });
+  const directory = writePack(root, 42, '大目录包', { id: 'many-entries' });
   const extra = path.join(directory, 'extra');
   fs.mkdirSync(extra);
-  for (let index = 0; index < 2100; index += 1) {
+  for (let index = 0; index < 5000; index += 1) {
     fs.writeFileSync(path.join(extra, `f-${index}.txt`), '');
   }
+  const readdirCalls = [];
+  const lstatCalls = [];
+  const readdir = fs.readdirSync;
+  const lstat = fs.lstatSync;
+  const inside = target => {
+    const resolved = path.resolve(String(target));
+    return resolved === extra || resolved.startsWith(extra + path.sep);
+  };
+  t.mock.method(fs, 'readdirSync', function (target, ...args) { if (inside(target)) readdirCalls.push(path.resolve(String(target))); return readdir.call(fs, target, ...args); });
+  t.mock.method(fs, 'lstatSync', function (target, ...args) { if (inside(target)) lstatCalls.push(path.resolve(String(target))); return lstat.call(fs, target, ...args); });
+  const started = Date.now();
   const registered = session.register(directory, 1);
   const preview = await session.preview(registered.token, 1);
-  assert.equal(preview.ok, false);
-  assert.equal(preview.code, 'ZIP_ENTRY_LIMIT');
-  assert.match(preview.error, /2000/);
-  assert.match(preview.error, /条目|文件或目录/);
-  assert.equal(library.list().length, 0);
+  assert.equal(preview.ok, true, preview.error);
+  const committed = await session.commit(registered.token, 1);
+  assert.equal(committed.ok, true, committed.error);
+  assert.ok(Date.now() - started < 5000, '预览和导入不应遍历无关大目录');
+  assert.deepEqual(readdirCalls, [], '无关目录不应被 readdir');
+  // 找 manifest 时只允许对顶层候选目录本身及其 manifest.json 做存在性检查；
+  // 目录里的 5000 个文件全部不进入、不 lstat。
+  assert.deepEqual(lstatCalls.filter(call => call !== extra && !call.endsWith(`${path.sep}manifest.json`)), [],
+    '无关目录里的文件不应被 lstat');
+  assert.equal(library.list().length, 1);
   assert.deepEqual(unzipNames(library), []);
+});
+
+test('未引用的无权限子目录不影响预览和导入', {
+  skip: typeof process.getuid === 'function' && process.getuid() === 0
+}, async t => {
+  const root = temporary(t);
+  const { library, session } = sessionFor(root);
+  const directory = writePack(root, 44, '无权限包', { id: 'locked-pack' });
+  // 顶层无权限目录：旧实现会在找 manifest 时 readdir 它并抛出未分类错误。
+  const lockedTop = path.join(directory, 'locked-top');
+  fs.mkdirSync(lockedTop);
+  fs.writeFileSync(path.join(lockedTop, 'secret.txt'), 'x');
+  // 更深一层的无权限目录：旧实现会整树遍历到这里。
+  const lockedNested = path.join(directory, 'assets', 'locked-nested');
+  fs.mkdirSync(lockedNested, { recursive: true });
+  fs.writeFileSync(path.join(lockedNested, 'secret.png'), 'x');
+  fs.chmodSync(lockedTop, 0o000);
+  fs.chmodSync(lockedNested, 0o000);
+  try {
+    const registered = session.register(directory, 1);
+    const preview = await session.preview(registered.token, 1);
+    assert.equal(preview.ok, true, preview.error);
+    const committed = await session.commit(registered.token, 1);
+    assert.equal(committed.ok, true, committed.error);
+    assert.equal(library.list().length, 1);
+    assert.deepEqual(unzipNames(library), []);
+  } finally {
+    fs.chmodSync(lockedTop, 0o755);
+    fs.chmodSync(lockedNested, 0o755);
+  }
 });
 
 test('文件夹总量超过 200 MB 时预览报 ZIP_LIMIT', async t => {

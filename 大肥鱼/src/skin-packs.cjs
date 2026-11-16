@@ -129,10 +129,23 @@ function normalizeManifest(value) {
 }
 
 function readJsonFile(file, maxBytes) {
-  const stat = fs.statSync(file);
+  const stat = fs.lstatSync(file);
+  if (stat.isSymbolicLink()) throw codedError('manifest.json 不能是符号链接或目录联接。', 'ZIP_SYMLINK');
   if (!stat.isFile()) throw new Error('manifest.json 不是文件。');
   if (stat.size > maxBytes) throw new Error('manifest.json 过大。');
   return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
+}
+
+// Every file a pack actually reads: the manifest itself plus each referenced
+// image and thumbnail. Unreferenced files are never opened, so they never need
+// a symlink check.
+function referencedFiles(manifest) {
+  const files = ['manifest.json'];
+  for (const character of manifest.characters) {
+    files.push(character.image);
+    if (character.thumbnail) files.push(character.thumbnail);
+  }
+  return [...new Set(files)];
 }
 
 function packContentId(manifest, sources) {
@@ -190,27 +203,44 @@ function findManifestDirectory(root) {
     if (stat.isSymbolicLink()) throw codedError('皮肤包里包含符号链接。', 'ZIP_SYMLINK');
     if (stat.isFile()) found.push(root);
   }
+  // Only the selected root and its direct children are examined: a pack lives
+  // at the root or in its single top-level directory. Subdirectories are never
+  // entered here, so an unreadable or huge sibling cannot fail or stall preview.
   for (const name of top) {
+    if (name === 'manifest.json') continue;
     const full = path.join(root, name);
     const stat = fs.lstatSync(full);
     if (stat.isSymbolicLink()) throw codedError('皮肤包里包含符号链接。', 'ZIP_SYMLINK');
     if (!stat.isDirectory()) continue;
-    const nested = path.join(full, 'manifest.json');
-    if (fs.existsSync(nested)) {
-      const nestedStat = fs.lstatSync(nested);
-      if (nestedStat.isSymbolicLink()) throw codedError('皮肤包里包含符号链接。', 'ZIP_SYMLINK');
-      if (nestedStat.isFile()) found.push(full);
-    }
-    for (const child of fs.readdirSync(full)) {
-      const childPath = path.join(full, child);
-      if (child === 'manifest.json' || skip.has(child)) continue;
-      let childStat;
-      try { childStat = fs.lstatSync(childPath); } catch { continue; }
-      if (!childStat.isDirectory()) continue;
-      if (fs.existsSync(path.join(childPath, 'manifest.json'))) {
-        const error = new Error('manifest.json 只能放在皮肤包根目录，或唯一一层顶层目录下；图片可按 manifest 的相对路径放在子目录里。');
-        error.code = 'ZIP_MANIFEST_LOCATION';
-        throw error;
+    let nestedStat;
+    try { nestedStat = fs.lstatSync(path.join(full, 'manifest.json')); }
+    catch { continue; }
+    if (nestedStat.isSymbolicLink()) throw codedError('皮肤包里包含符号链接。', 'ZIP_SYMLINK');
+    if (nestedStat.isFile()) found.push(full);
+  }
+  if (!found.length) {
+    // No manifest at an allowed depth. Look one level deeper only to keep the
+    // specific "manifest.json 只能放在..." message; every directory read is
+    // guarded, so an unreadable tree still ends in "缺少 manifest.json" instead
+    // of an unclassified permission error.
+    for (const name of top) {
+      if (name === 'manifest.json') continue;
+      const full = path.join(root, name);
+      let children = [];
+      try { children = fs.readdirSync(full); } catch { continue; }
+      for (const child of children) {
+        if (skip.has(child)) continue;
+        const childPath = path.join(full, child);
+        let childStat;
+        try { childStat = fs.lstatSync(childPath); } catch { continue; }
+        if (!childStat.isDirectory()) continue;
+        let deeperManifest = null;
+        try { deeperManifest = fs.lstatSync(path.join(childPath, 'manifest.json')); } catch { continue; }
+        if (deeperManifest.isSymbolicLink() || deeperManifest.isFile()) {
+          const error = new Error('manifest.json 只能放在皮肤包根目录，或唯一一层顶层目录下；图片可按 manifest 的相对路径放在子目录里。');
+          error.code = 'ZIP_MANIFEST_LOCATION';
+          throw error;
+        }
       }
     }
   }
@@ -252,23 +282,51 @@ function readPackFile(root, relative, maxBytes, label) {
   return bytes;
 }
 
+// 方案 ①：不遍历整棵树。只对 manifest 引用到的每个文件逐段 lstat——从选中根
+// 到该文件的每一级父目录都不能是符号链接或目录联接，引用文件本身也不能是。
+// 未引用到的子目录（再大、再深、无权限）永远不会被 readdir/lstat，所以误选
+// C:\、用户目录或大型仓库时预览/导入不会卡住，也不会抛出未分类错误。
+// 条目上限只统计真正检查过的路径段/引用文件，不会为了计数去扫描目录树。
 function assertNoSymlinks(root, options = {}) {
-  const maxEntries = options.maxEntries ?? SKIN_PACK_LIMITS.maxFolderEntries;
-  const pending = [root];
-  let entries = 0;
-  while (pending.length) {
-    const directory = pending.pop();
-    for (const name of fs.readdirSync(directory)) {
-      entries += 1;
-      if (entries > maxEntries) {
-        throw codedError(`皮肤包文件夹里的文件或目录超过 ${maxEntries} 个，已拒绝导入；请只选择包含 manifest.json 和角色图片的文件夹。`, 'ZIP_ENTRY_LIMIT');
+  const source = path.resolve(root);
+  const maxPaths = options.maxEntries ?? SKIN_PACK_LIMITS.maxFolderEntries;
+  const references = Array.isArray(options.references) ? options.references : ['manifest.json'];
+  let rootStat;
+  try { rootStat = fs.lstatSync(source); }
+  catch { throw codedError('皮肤包文件夹无法读取。', 'ZIP_FORMAT'); }
+  if (rootStat.isSymbolicLink()) throw codedError('皮肤包文件夹不能是符号链接或目录联接。', 'ZIP_SYMLINK');
+  if (!rootStat.isDirectory()) throw codedError('皮肤包需要选择文件夹。', 'ZIP_FORMAT');
+  const checked = new Set();
+  let count = 0;
+  for (const reference of references) {
+    const parts = String(reference).replace(/\\/g, '/').split('/').filter(Boolean);
+    if (!parts.length || parts.some(part => part === '.' || part === '..')) {
+      throw new Error('皮肤包文件路径不能跳出皮肤包目录。');
+    }
+    let current = source;
+    for (let index = 0; index < parts.length; index += 1) {
+      current = path.join(current, parts[index]);
+      // Parent directories shared by several references are lstat'ed once.
+      if (checked.has(current)) continue;
+      checked.add(current);
+      count += 1;
+      if (count > maxPaths) {
+        throw codedError(`皮肤包引用的文件或目录路径超过 ${maxPaths} 个，已拒绝导入；请只选择包含 manifest.json 和角色图片的文件夹。`, 'ZIP_ENTRY_LIMIT');
       }
-      const full = path.join(directory, name);
-      const stat = fs.lstatSync(full);
+      let stat;
+      try { stat = fs.lstatSync(current); }
+      catch (error) {
+        if (error.code === 'ENOENT' || error.code === 'ENOTDIR') {
+          throw codedError(`皮肤包缺少文件：${reference}`, 'ZIP_FORMAT');
+        }
+        throw codedError(`皮肤包文件无法读取：${reference}`, 'ZIP_FORMAT');
+      }
       if (stat.isSymbolicLink()) {
-        throw codedError(`皮肤包文件夹包含符号链接或目录联接：${path.relative(root, full)}，已拒绝。`, 'ZIP_SYMLINK');
+        throw codedError(`皮肤包文件夹包含符号链接或目录联接：${path.relative(source, current)}，已拒绝。`, 'ZIP_SYMLINK');
       }
-      if (stat.isDirectory()) pending.push(full);
+      if (index < parts.length - 1 && !stat.isDirectory()) {
+        throw codedError(`皮肤包缺少文件：${reference}`, 'ZIP_FORMAT');
+      }
     }
   }
 }
@@ -400,16 +458,18 @@ class SkinPackLibrary {
   // Folder imports are snapshotted before installation to close the
   // preview/commit race. Copy only the files the manifest references: never
   // `cpSync` a user folder wholesale, because unreferenced giant files or
-  // symlinks/junctions must not be pulled into the data directory.
+  // symlinks/junctions must not be pulled into the data directory. The same
+  // referenced-path symlink check as preview/identify runs here before any read.
   copyReferencedDirectory(sourceDirectory, targetDirectory) {
     const source = path.resolve(sourceDirectory);
     const target = path.resolve(targetDirectory);
     if (target === source || target.startsWith(source + path.sep)) {
       throw new Error('皮肤包临时目录不能位于源文件夹内。');
     }
-    assertNoSymlinks(source);
+    assertNoSymlinks(source, { references: ['manifest.json'] });
     const manifestBytes = readPackFile(source, 'manifest.json', SKIN_PACK_LIMITS.maxManifestBytes, 'manifest.json');
     const manifest = parseManifestBytes(manifestBytes);
+    assertNoSymlinks(source, { references: referencedFiles(manifest) });
     fs.mkdirSync(target, { recursive: true });
     writePackFile(target, 'manifest.json', manifestBytes);
     let totalBytes = 0;
@@ -436,7 +496,9 @@ class SkinPackLibrary {
     const root = path.resolve(sourceDirectory);
     const manifestFile = path.join(root, 'manifest.json');
     if (!fs.existsSync(manifestFile)) throw new Error('皮肤包缺少 manifest.json。');
+    assertNoSymlinks(root, { references: ['manifest.json'] });
     const manifest = normalizeManifest(readJsonFile(manifestFile, SKIN_PACK_LIMITS.maxManifestBytes));
+    assertNoSymlinks(root, { references: referencedFiles(manifest) });
     const sources = [];
     let totalBytes = 0;
     for (const character of manifest.characters) {
@@ -536,7 +598,11 @@ class SkinPackLibrary {
   }
 
   identifyDirectory(root) {
+    assertNoSymlinks(root, { references: ['manifest.json'] });
     const manifest = normalizeManifest(readJsonFile(path.join(root, 'manifest.json'), SKIN_PACK_LIMITS.maxManifestBytes));
+    // Preview and commit both identify the pack through this method, so the
+    // referenced-path symlink check is identical for both phases.
+    assertNoSymlinks(root, { references: referencedFiles(manifest) });
     const sources = [];
     let totalBytes = 0;
     for (const character of manifest.characters) {

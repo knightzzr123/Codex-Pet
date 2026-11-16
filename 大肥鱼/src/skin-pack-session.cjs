@@ -2,7 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { randomBytes, randomUUID } = require('node:crypto');
 const { ZIP_LIMITS, writeEntries } = require('./zip-reader.cjs');
-const { findManifestDirectory, assertNoSymlinks, firstCharacterLink } = require('./skin-packs.cjs');
+const { findManifestDirectory, firstCharacterLink } = require('./skin-packs.cjs');
 
 const TOKEN_TTL_MS = 10 * 60 * 1000;
 const MAX_TOKENS = 4;
@@ -172,11 +172,11 @@ function createSkinPackSession(options = {}) {
           throw error;
         }
       } else {
-        // Preview reads manifest-referenced images from the user's folder. A
-        // symlinked image or a symlinked parent directory would let that read
-        // escape the selected folder, so reject the whole tree before reading
-        // anything; commit() repeats the walk on the manifest directory.
-        assertNoSymlinks(record.filePath);
+        // Preview reads manifest-referenced images from the user's folder.
+        // identifyDirectory() lstats only the manifest and every referenced
+        // file's path segments (via assertNoSymlinks), so unreferenced
+        // subdirectories are never entered or checked. commit() repeats the
+        // same check, including whole-path validation before the snapshot copy.
         record.dir = findManifestDirectory(record.filePath);
         record.ownsDir = false;
       }

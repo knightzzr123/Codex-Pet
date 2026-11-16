@@ -6,7 +6,7 @@ const path = require('node:path');
 const { SkinLibrary } = require('../src/skins.cjs');
 const {
   SkinPackLibrary, normalizeManifest, validateThumbnail, packCharacterId, parsePackCharacterId,
-  findManifestDirectory
+  findManifestDirectory, assertNoSymlinks
 } = require('../src/skin-packs.cjs');
 const { MANIFEST_VERSION } = require('../src/manifests.cjs');
 
@@ -192,6 +192,66 @@ test('findManifestDirectory 对符号链接的 manifest.json 给出 ZIP_SYMLINK'
   fs.symlinkSync(real, path.join(wrapper, 'manifest.json'));
   assert.throws(() => findManifestDirectory(wrapper),
     error => error.code === 'ZIP_SYMLINK' && /符号链接/.test(error.message));
+});
+
+test('findManifestDirectory 不进入无关子目录，只按根目录和一层顶层目录找 manifest', t => {
+  const root = temporary(t);
+  const directory = fs.mkdtempSync(path.join(root, 'pack-'));
+  fs.writeFileSync(path.join(directory, 'manifest.json'), JSON.stringify({ manifestVersion: MANIFEST_VERSION, name: '正常包', characters: [] }));
+  fs.writeFileSync(path.join(directory, 'role.png'), png(300, 300));
+  const huge = path.join(directory, 'unrelated');
+  fs.mkdirSync(huge);
+  for (let index = 0; index < 2100; index += 1) fs.writeFileSync(path.join(huge, `f-${index}.txt`), '');
+  assert.equal(findManifestDirectory(directory), directory);
+
+  const nested = fs.mkdtempSync(path.join(root, 'nested-pack-'));
+  fs.writeFileSync(path.join(nested, 'manifest.json'), JSON.stringify({ manifestVersion: MANIFEST_VERSION, name: '嵌套包', characters: [] }));
+  const wrapper = fs.mkdtempSync(path.join(root, 'wrapper-'));
+  fs.mkdirSync(path.join(wrapper, 'pack'));
+  fs.copyFileSync(path.join(nested, 'manifest.json'), path.join(wrapper, 'pack', 'manifest.json'));
+  assert.equal(findManifestDirectory(wrapper), path.join(wrapper, 'pack'));
+});
+
+test('assertNoSymlinks 只逐段检查引用路径，按检查过的路径段计数', t => {
+  const root = temporary(t);
+  const directory = fs.mkdtempSync(path.join(root, 'pack-'));
+  fs.mkdirSync(path.join(directory, 'images', 'deep'), { recursive: true });
+  fs.writeFileSync(path.join(directory, 'images', 'deep', 'whale.png'), png(300, 300));
+  fs.writeFileSync(path.join(directory, 'manifest.json'), '{}');
+  const references = ['manifest.json', 'images/deep/whale.png'];
+  assert.doesNotThrow(() => assertNoSymlinks(directory, { references }));
+  // 引用路径共 4 段：manifest.json / images / images/deep / images/deep/whale.png
+  assert.doesNotThrow(() => assertNoSymlinks(directory, { references, maxEntries: 4 }));
+  assert.throws(() => assertNoSymlinks(directory, { references, maxEntries: 3 }),
+    error => error.code === 'ZIP_ENTRY_LIMIT' && /3/.test(error.message));
+
+  fs.renameSync(path.join(directory, 'images', 'deep', 'whale.png'), path.join(directory, 'real.png'));
+  fs.symlinkSync(path.join(directory, 'real.png'), path.join(directory, 'images', 'deep', 'whale.png'));
+  assert.throws(() => assertNoSymlinks(directory, { references }),
+    error => error.code === 'ZIP_SYMLINK' && /符号链接|目录联接/.test(error.message));
+
+  fs.unlinkSync(path.join(directory, 'images', 'deep', 'whale.png'));
+  fs.renameSync(path.join(directory, 'images', 'deep'), path.join(directory, 'deep-real'));
+  fs.symlinkSync(path.join(directory, 'deep-real'), path.join(directory, 'images', 'deep'), 'dir');
+  assert.throws(() => assertNoSymlinks(directory, { references }),
+    error => error.code === 'ZIP_SYMLINK' && /images\/deep/.test(error.message));
+});
+
+test('assertNoSymlinks 不读、不计数无关目录（2100 个文件也不进入）', t => {
+  const root = temporary(t);
+  const directory = fs.mkdtempSync(path.join(root, 'pack-'));
+  fs.writeFileSync(path.join(directory, 'manifest.json'), '{}');
+  fs.writeFileSync(path.join(directory, 'whale.png'), png(300, 300));
+  const huge = path.join(directory, 'unrelated');
+  fs.mkdirSync(huge);
+  for (let index = 0; index < 2100; index += 1) fs.writeFileSync(path.join(huge, `f-${index}.txt`), '');
+  const calls = [];
+  const readdir = fs.readdirSync;
+  const lstat = fs.lstatSync;
+  t.mock.method(fs, 'readdirSync', function (target, ...args) { calls.push(path.resolve(String(target))); return readdir.call(fs, target, ...args); });
+  t.mock.method(fs, 'lstatSync', function (target, ...args) { calls.push(path.resolve(String(target))); return lstat.call(fs, target, ...args); });
+  assert.doesNotThrow(() => assertNoSymlinks(directory, { references: ['manifest.json', 'whale.png'] }));
+  assert.deepEqual(calls.filter(call => call === huge || call.startsWith(huge + path.sep)), []);
 });
 
 test('多角色选择链接可稳定解析，非法链接返回 null', () => {
