@@ -20,7 +20,11 @@ const SKIN_PACK_LIMITS = Object.freeze({
   maxManifestBytes: 64 * 1024,
   maxCharacters: 12,
   maxImageBytes: 20 * 1024 * 1024,
-  maxTotalBytes: 200 * 1024 * 1024
+  maxTotalBytes: 200 * 1024 * 1024,
+  // Folder imports walk the selected tree to reject symlinks/junctions before
+  // any image is read. Cap the walk so a pathological tree cannot stall the
+  // settings window; only folders that really are skin packs fit under this.
+  maxFolderEntries: 2000
 });
 
 const SLUG_PATTERN = /^[a-z0-9][a-z0-9_-]{0,39}$/i;

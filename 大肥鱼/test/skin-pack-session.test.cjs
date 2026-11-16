@@ -440,22 +440,88 @@ test('文件夹导入的单图 20 MB 上限仍然生效', async t => {
   const registered = session.register(directory, 1);
   const preview = await session.preview(registered.token, 1);
   assert.equal(preview.ok, false);
+  assert.equal(preview.code, 'ZIP_LIMIT');
   assert.match(preview.error, /20 MB|大小/);
   assert.equal(library.list().length, 0);
 });
 
-test('文件夹内任意层级的符号链接都在快照前拒绝', async t => {
+test('文件夹内任意层级的符号链接在预览阶段就拒绝', async t => {
   const root = temporary(t);
   const { library, session } = sessionFor(root);
   const directory = writePack(root, 34, '嵌套链接包', { id: 'nested-link-pack' });
   fs.mkdirSync(path.join(directory, 'nested'));
   fs.symlinkSync(path.join(directory, 'whale.png'), path.join(directory, 'nested', 'link.png'));
   const registered = session.register(directory, 1);
-  assert.equal((await session.preview(registered.token, 1)).ok, true);
-  const committed = await session.commit(registered.token, 1);
-  assert.equal(committed.ok, false);
-  assert.equal(committed.code, 'ZIP_SYMLINK');
-  assert.match(committed.error, /符号链接/);
+  const preview = await session.preview(registered.token, 1);
+  assert.equal(preview.ok, false);
+  assert.equal(preview.code, 'ZIP_SYMLINK');
+  assert.match(preview.error, /符号链接/);
   assert.equal(library.list().length, 0);
   assert.deepEqual(unzipNames(library), []);
+  // A failed preview consumes the token, so commit cannot reuse it.
+  assert.equal((await session.commit(registered.token, 1)).code, 'TOKEN_INVALID');
+});
+
+test('文件夹预览拒绝指向文件夹外的目录链接，不读取外部图片', async t => {
+  const root = temporary(t);
+  const { library, session } = sessionFor(root);
+  const outside = path.join(root, 'outside');
+  fs.mkdirSync(outside);
+  fs.writeFileSync(path.join(outside, 'whale.png'), png(41));
+  const directory = fs.mkdtempSync(path.join(root, 'pack-'));
+  fs.writeFileSync(path.join(directory, 'manifest.json'), JSON.stringify({
+    manifestVersion: MANIFEST_VERSION, name: '外链包', version: '1.0.0',
+    characters: [{ id: 'whale', name: '鲸鱼', image: 'images/whale.png' }]
+  }));
+  fs.symlinkSync(outside, path.join(directory, 'images'), 'dir');
+  const registered = session.register(directory, 1);
+  assert.equal(registered.ok, true);
+  const preview = await session.preview(registered.token, 1);
+  assert.equal(preview.ok, false);
+  assert.equal(preview.code, 'ZIP_SYMLINK');
+  assert.match(preview.error, /符号链接/);
+  assert.equal(library.list().length, 0);
+  assert.deepEqual(unzipNames(library), []);
+});
+
+test('文件夹条目超过 2000 个时在预览阶段拒绝', async t => {
+  const root = temporary(t);
+  const { library, session } = sessionFor(root);
+  const directory = writePack(root, 42, '太多条目', { id: 'many-entries' });
+  const extra = path.join(directory, 'extra');
+  fs.mkdirSync(extra);
+  for (let index = 0; index < 2100; index += 1) {
+    fs.writeFileSync(path.join(extra, `f-${index}.txt`), '');
+  }
+  const registered = session.register(directory, 1);
+  const preview = await session.preview(registered.token, 1);
+  assert.equal(preview.ok, false);
+  assert.equal(preview.code, 'ZIP_ENTRY_LIMIT');
+  assert.match(preview.error, /2000/);
+  assert.match(preview.error, /条目|文件或目录/);
+  assert.equal(library.list().length, 0);
+  assert.deepEqual(unzipNames(library), []);
+});
+
+test('文件夹总量超过 200 MB 时预览报 ZIP_LIMIT', async t => {
+  const root = temporary(t);
+  const { library, session } = sessionFor(root);
+  const directory = fs.mkdtempSync(path.join(root, 'pack-'));
+  const image = path.join(directory, 'whale.png');
+  const fd = fs.openSync(image, 'w');
+  fs.writeSync(fd, png(43), 0, 48, 0);
+  fs.ftruncateSync(fd, 19 * 1024 * 1024);
+  fs.closeSync(fd);
+  const characters = Array.from({ length: 11 }, (_, index) => ({
+    id: `c${index}`, name: `角色${index}`, image: 'whale.png'
+  }));
+  fs.writeFileSync(path.join(directory, 'manifest.json'), JSON.stringify({
+    manifestVersion: MANIFEST_VERSION, name: '总量超限', version: '1.0.0', characters
+  }));
+  const registered = session.register(directory, 1);
+  const preview = await session.preview(registered.token, 1);
+  assert.equal(preview.ok, false);
+  assert.equal(preview.code, 'ZIP_LIMIT');
+  assert.match(preview.error, /200 MB/);
+  assert.equal(library.list().length, 0);
 });

@@ -5,7 +5,8 @@ const os = require('node:os');
 const path = require('node:path');
 const { SkinLibrary } = require('../src/skins.cjs');
 const {
-  SkinPackLibrary, normalizeManifest, validateThumbnail, packCharacterId, parsePackCharacterId
+  SkinPackLibrary, normalizeManifest, validateThumbnail, packCharacterId, parsePackCharacterId,
+  findManifestDirectory
 } = require('../src/skin-packs.cjs');
 const { MANIFEST_VERSION } = require('../src/manifests.cjs');
 
@@ -168,6 +169,29 @@ test('兼容原有单张图片皮肤：skins 目录与皮肤包目录互不影�
   await packs.importDirectory(packSource, async () => {});
   assert.deepEqual(new SkinLibrary(root).list().map(skin => skin.id), [legacy.id]);
   assert.equal(new SkinPackLibrary(root).list().length, 1);
+});
+
+
+test('findManifestDirectory 对顶层符号链接给出 ZIP_SYMLINK', t => {
+  const root = temporary(t);
+  const directory = writePack(root, {
+    name: '链接包',
+    characters: [{ id: 'whale', name: '鲸鱼', image: 'whale.png' }]
+  });
+  const outside = fs.mkdtempSync(path.join(root, 'outside-'));
+  fs.symlinkSync(outside, path.join(directory, 'linked'), 'dir');
+  assert.throws(() => findManifestDirectory(directory),
+    error => error.code === 'ZIP_SYMLINK' && /符号链接/.test(error.message));
+});
+
+test('findManifestDirectory 对符号链接的 manifest.json 给出 ZIP_SYMLINK', t => {
+  const root = temporary(t);
+  const wrapper = fs.mkdtempSync(path.join(root, 'wrapper-'));
+  const real = path.join(root, 'real-manifest.json');
+  fs.writeFileSync(real, JSON.stringify({ manifestVersion: MANIFEST_VERSION, name: '链接包', characters: [] }));
+  fs.symlinkSync(real, path.join(wrapper, 'manifest.json'));
+  assert.throws(() => findManifestDirectory(wrapper),
+    error => error.code === 'ZIP_SYMLINK' && /符号链接/.test(error.message));
 });
 
 test('多角色选择链接可稳定解析，非法链接返回 null', () => {

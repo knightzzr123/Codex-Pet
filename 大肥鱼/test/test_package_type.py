@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -50,12 +51,41 @@ class PackageTypeTests(unittest.TestCase):
         subprocess.run(['git', '-C', str(self.project), 'add', '.'], check=True)
         return subprocess.run([sys.executable, str(SOURCE_SCRIPT), '--root', str(self.project), '--output', str(output)], text=True, capture_output=True)
 
-    def run_package(self, output, runtime=None, original=None):
-        command = [sys.executable, str(PACKAGE_SCRIPT), '--root', str(self.project), '--output', str(output), '--verify-directory', str(self.base / ('verify-' + output.stem)), '--metadata-directory', str(self.base / 'metadata'), '--version', '3.3.2']
+    def run_package(self, output, runtime=None, original=None, version='3.3.2'):
+        command = [sys.executable, str(PACKAGE_SCRIPT), '--root', str(self.project), '--output', str(output), '--verify-directory', str(self.base / ('verify-' + output.stem)), '--metadata-directory', str(self.base / 'metadata'), '--version', version]
         if runtime is not None:
             command += ['--runtime-archive', str(runtime)]
         if original is not None:
             command += ['--original', str(original)]
+        return subprocess.run(command, text=True, capture_output=True)
+
+    def run_sums(self, complete, source, output=None):
+        command = [sys.executable, str(SUMS_SCRIPT), '--complete', str(complete),
+                   '--source', str(source), '--version', '3.4.0',
+                   '--output', str(output or (self.base / 'SHA256SUMS'))]
+        return subprocess.run(command, text=True, capture_output=True)
+
+    def write_sidecar(self, file):
+        sidecar = file.with_name(file.name + '.sha256')
+        sidecar.write_text(f'{hashlib.sha256(file.read_bytes()).hexdigest()}  {file.name}\n',
+                           encoding='utf-8', newline='\n')
+
+    def build_both_packages(self, complete_name='complete.zip', source_name='source.zip',
+                            directory=None, version='3.3.2'):
+        directory = Path(directory or self.base)
+        directory.mkdir(parents=True, exist_ok=True)
+        complete = directory / complete_name
+        source = directory / source_name
+        packed = self.run_package(complete, runtime=self.runtime, version=version)
+        self.assertEqual(packed.returncode, 0, packed.stderr + packed.stdout)
+        sourced = self.run_source(source)
+        self.assertEqual(sourced.returncode, 0, sourced.stderr)
+        return complete, source
+
+    def run_release_check(self, package, report=None):
+        command = ['node', str(ROOT / 'tools' / 'release-check.cjs'), '--package', str(package)]
+        if report is not None:
+            command += ['--report', str(report)]
         return subprocess.run(command, text=True, capture_output=True)
 
     def test_source_package_has_source_marker_and_no_runtime(self):
@@ -195,6 +225,90 @@ class PackageTypeTests(unittest.TestCase):
         self.assertNotEqual(mismatch.returncode, 0)
         self.assertIn('does not match', mismatch.stderr)
 
+    def test_write_sha256sums_rejects_swapped_complete_and_source(self):
+        complete, source = self.build_both_packages()
+        output = self.base / 'release' / 'SHA256SUMS'
+        swapped = self.run_sums(source, complete, output)
+        self.assertNotEqual(swapped.returncode, 0)
+        self.assertIn('type mismatch', swapped.stderr)
+        self.assertIn('--complete', swapped.stderr)
+        self.assertIn('source package', swapped.stderr)
+        self.assertFalse(output.exists())
+
+        both_complete = self.run_sums(complete, complete, output)
+        self.assertNotEqual(both_complete.returncode, 0)
+        self.assertIn('--source', both_complete.stderr)
+        self.assertIn('complete package', both_complete.stderr)
+        self.assertFalse(output.exists())
+
+        both_source = self.run_sums(source, source, output)
+        self.assertNotEqual(both_source.returncode, 0)
+        self.assertIn('--complete', both_source.stderr)
+        self.assertFalse(output.exists())
+
+    def test_write_sha256sums_requires_a_package_type_marker(self):
+        _, source = self.build_both_packages()
+        bare = self.base / 'bare.zip'
+        with zipfile.ZipFile(bare, 'w') as archive:
+            archive.writestr('大肥鱼/package.json', '{}')
+        self.write_sidecar(bare)
+        output = self.base / 'release' / 'SHA256SUMS'
+        result = self.run_sums(bare, source, output)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('exactly one PACKAGE-TYPE.json', result.stderr)
+        self.assertFalse(output.exists())
+
+    def test_write_sha256sums_rejects_unreadable_or_invalid_marker(self):
+        _, source = self.build_both_packages()
+        output = self.base / 'release' / 'SHA256SUMS'
+
+        broken = self.base / 'broken.zip'
+        broken.write_bytes(b'not a zip')
+        self.write_sidecar(broken)
+        result = self.run_sums(broken, source, output)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('not a readable ZIP', result.stderr)
+
+        invalid = self.base / 'invalid.zip'
+        with zipfile.ZipFile(invalid, 'w') as archive:
+            archive.writestr('大肥鱼/PACKAGE-TYPE.json', 'not json')
+        self.write_sidecar(invalid)
+        result = self.run_sums(invalid, source, output)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Invalid PACKAGE-TYPE.json', result.stderr)
+        self.assertFalse(output.exists())
+
+    @unittest.skipUnless(shutil.which('node'), 'Node.js is required for release-check')
+    def test_documented_release_order_passes_release_check(self):
+        complete_name = 'dafeiyu-codex-pet-3.4.0-windows-x64.zip'
+        source_name = 'dafeiyu-codex-pet-3.4.0-source.zip'
+        release = self.base / 'release'
+        complete, source = self.build_both_packages(complete_name, source_name, release, version='3.4.0')
+        with zipfile.ZipFile(complete) as archive:
+            archive.extractall(release)
+        package = release / '大肥鱼'
+        # README order: check the unpacked package first (no SHA256SUMS yet),
+        # then aggregate next to the official asset names, then check again.
+        first = self.run_release_check(package)
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        self.assertIn('"ok": true', first.stdout)
+        self.assertFalse((release / 'SHA256SUMS').exists())
+
+        sums = self.run_sums(complete, source, release / 'SHA256SUMS')
+        self.assertEqual(sums.returncode, 0, sums.stderr + sums.stdout)
+        self.assertEqual(sorted(path.name for path in release.glob('dafeiyu-*.zip')),
+                         sorted([complete_name, source_name]))
+        self.assertEqual((release / 'SHA256SUMS').read_bytes().count(b'\n'), 2)
+        self.assertNotIn(b'\r', (release / 'SHA256SUMS').read_bytes())
+
+        report = release / 'report.json'
+        second = self.run_release_check(package, report)
+        self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
+        self.assertIn('"ok": true', second.stdout)
+        parsed = json.loads(report.read_text(encoding='utf-8'))
+        self.assertEqual(parsed['sha256sums']['checked'], True)
+        self.assertEqual(parsed['sha256sums']['verified'], 2)
+        self.assertEqual(parsed['sha256sums']['errors'], [])
 
 
 if __name__ == '__main__':

@@ -2,7 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { randomBytes, randomUUID } = require('node:crypto');
 const { ZIP_LIMITS, writeEntries } = require('./zip-reader.cjs');
-const { findManifestDirectory, firstCharacterLink } = require('./skin-packs.cjs');
+const { findManifestDirectory, assertNoSymlinks, firstCharacterLink } = require('./skin-packs.cjs');
 
 const TOKEN_TTL_MS = 10 * 60 * 1000;
 const MAX_TOKENS = 4;
@@ -11,6 +11,7 @@ const MESSAGES = Object.freeze({
   PATH_REJECTED: '只能导入 .zip 或皮肤包文件夹。',
   ZIP_SYMLINK: '不接受符号链接。',
   ZIP_LIMIT: '压缩包超过大小上限。',
+  ZIP_ENTRY_LIMIT: '皮肤包文件夹里的文件或目录太多，已拒绝导入。',
   ZIP_SENDER: '只有设置窗口可以导入皮肤包。',
   TOKEN_INVALID: '这个导入凭证无效、已过期或已使用。',
   PACK_CHANGED: '皮肤包在预览之后被改过，请重新选择。',
@@ -171,6 +172,11 @@ function createSkinPackSession(options = {}) {
           throw error;
         }
       } else {
+        // Preview reads manifest-referenced images from the user's folder. A
+        // symlinked image or a symlinked parent directory would let that read
+        // escape the selected folder, so reject the whole tree before reading
+        // anything; commit() repeats the walk on the manifest directory.
+        assertNoSymlinks(record.filePath);
         record.dir = findManifestDirectory(record.filePath);
         record.ownsDir = false;
       }

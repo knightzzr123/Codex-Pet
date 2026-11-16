@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import re
+import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -37,6 +38,34 @@ def sidecar_hash(file):
     return match.group(1)
 
 
+def package_type(file):
+    try:
+        with zipfile.ZipFile(file) as archive:
+            markers = [name for name in archive.namelist()
+                       if name == 'PACKAGE-TYPE.json' or name.endswith('/PACKAGE-TYPE.json')]
+            if len(markers) != 1:
+                raise SystemExit(
+                    f'Release asset must contain exactly one PACKAGE-TYPE.json '
+                    f'(found {len(markers)}): {file}')
+            try:
+                marker = json.loads(archive.read(markers[0]))
+            except ValueError:
+                raise SystemExit(f'Invalid PACKAGE-TYPE.json: {file}')
+    except zipfile.BadZipFile:
+        raise SystemExit(f'Release asset is not a readable ZIP: {file}')
+    if not isinstance(marker, dict) or not isinstance(marker.get('packageType'), str):
+        raise SystemExit(f'Invalid PACKAGE-TYPE.json: {file}')
+    return marker['packageType']
+
+
+def require_package_type(file, expected, flag):
+    actual = package_type(file)
+    if actual != expected:
+        raise SystemExit(
+            f'Release asset type mismatch: {flag} expects a {expected} package but '
+            f'{file} is a {actual} package. Check that --complete and --source are not swapped.')
+
+
 version = args.version
 if version is None:
     version = json.loads((ROOT / 'package.json').read_text(encoding='utf-8'))['version']
@@ -50,6 +79,12 @@ for file in (complete, source):
         raise SystemExit(f'Release asset not found: {file}')
     if file.suffix.lower() != '.zip':
         raise SystemExit(f'Release asset must be a ZIP: {file}')
+# The asset names are derived from the flags, so a swapped --complete/--source
+# would publish the two hashes under each other's names. Verify the markers
+# packaged next to each ZIP before writing anything.
+require_package_type(complete, 'complete', '--complete')
+require_package_type(source, 'source', '--source')
+for file in (complete, source):
     if sidecar_hash(file) != digest(file):
         raise SystemExit(f'Sidecar checksum does not match: {file}')
 

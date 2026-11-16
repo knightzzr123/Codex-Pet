@@ -72,20 +72,29 @@ Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
 
 ## 打包与发布
 
-打包需要 Python 3.11+，可从已有完整安装包复用经过校验的运行时：
+打包需要 Python 3.11+，可从已有完整安装包复用经过校验的运行时。发布目录里直接用正式资产名，并把压缩包、解压后的 `大肥鱼\` 和 `SHA256SUMS` 放在同一层——`release-check --package` 会在该层按 `SHA256SUMS` 里的名字找产物，名字对不上就会报「产物不存在」：
 
 ```powershell
-python tools/package.py --original "完整安装包.zip" --output "..\大肥鱼-完整安装包.zip" --version 3.4.0
+New-Item -ItemType Directory -Force ..\release | Out-Null
+python tools/package.py --original "完整安装包.zip" `
+  --output "..\release\dafeiyu-codex-pet-3.4.0-windows-x64.zip" --version 3.4.0
+python tools/package-source.py --output "..\release\dafeiyu-codex-pet-3.4.0-source.zip"
 ```
 
-`--version` 默认值现已与源码对齐为 `3.4.0`，仍建议显式传入以免误用。`tools/package-source.py` 生成带 `PACKAGE-TYPE.json` 的源码包，不能当作完整安装包直接安装。两个打包脚本都会在产物旁写出 `<产物名>.sha256`（LF），且不会覆盖 `SHA256SUMS`。上传 Release 前，用最终资产名汇总成一份清单：
+`--version` 默认值现已与源码对齐为 `3.4.0`，仍建议显式传入以免误用。`tools/package-source.py` 生成带 `PACKAGE-TYPE.json` 的源码包，不能当作完整安装包直接安装。两个打包脚本都会在产物旁写出 `<产物名>.sha256`（LF），且不会覆盖 `SHA256SUMS`。
+
+顺序是先自检、再汇总、汇总后再自检：解压完整包时还没有 `SHA256SUMS`，第一次自检只验证包结构；汇总脚本会核对两个包内的 `PACKAGE-TYPE.json`，把 `--complete` 与 `--source` 写反会直接报错退出；最后再自检一次，确认 `SHA256SUMS` 指向的正式资产确实都在发布目录里：
 
 ```powershell
-python tools/package-source.py --output "..\大肥鱼-GitHub源码.zip"
+Expand-Archive "..\release\dafeiyu-codex-pet-3.4.0-windows-x64.zip" -DestinationPath "..\release" -Force
+node tools/release-check.cjs --package "..\release\大肥鱼"
+
 python tools/write-sha256sums.py --version 3.4.0 `
-  --complete "..\大肥鱼-完整安装包.zip" `
-  --source "..\大肥鱼-GitHub源码.zip" `
-  --output "..\SHA256SUMS"
+  --complete "..\release\dafeiyu-codex-pet-3.4.0-windows-x64.zip" `
+  --source "..\release\dafeiyu-codex-pet-3.4.0-source.zip" `
+  --output "..\release\SHA256SUMS"
+
+node tools/release-check.cjs --package "..\release\大肥鱼"
 ```
 
 完整安装包必须包含通过 `runtime-manifest.json` 校验的 `runtime.7z`。展示标签为 `Codex-Pet-V1.4`。

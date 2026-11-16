@@ -13,6 +13,12 @@ const PACK_ID = /^[a-f0-9]{64}$/;
 const CHARACTER_LINK = /^pack:([a-f0-9]{64}):([a-zA-Z0-9][a-zA-Z0-9_-]{0,39})$/;
 const PACKS_INDEX_VERSION = 1;
 
+function codedError(message, code) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+
 function isPackId(value) {
   return typeof value === 'string' && PACK_ID.test(value);
 }
@@ -181,16 +187,20 @@ function findManifestDirectory(root) {
   if (top.includes('manifest.json')) {
     const full = path.join(root, 'manifest.json');
     const stat = fs.lstatSync(full);
-    if (stat.isSymbolicLink()) throw new Error('皮肤包里包含符号链接。');
+    if (stat.isSymbolicLink()) throw codedError('皮肤包里包含符号链接。', 'ZIP_SYMLINK');
     if (stat.isFile()) found.push(root);
   }
   for (const name of top) {
     const full = path.join(root, name);
     const stat = fs.lstatSync(full);
-    if (stat.isSymbolicLink()) throw new Error('皮肤包里包含符号链接。');
+    if (stat.isSymbolicLink()) throw codedError('皮肤包里包含符号链接。', 'ZIP_SYMLINK');
     if (!stat.isDirectory()) continue;
     const nested = path.join(full, 'manifest.json');
-    if (fs.existsSync(nested) && fs.lstatSync(nested).isFile()) found.push(full);
+    if (fs.existsSync(nested)) {
+      const nestedStat = fs.lstatSync(nested);
+      if (nestedStat.isSymbolicLink()) throw codedError('皮肤包里包含符号链接。', 'ZIP_SYMLINK');
+      if (nestedStat.isFile()) found.push(full);
+    }
     for (const child of fs.readdirSync(full)) {
       const childPath = path.join(full, child);
       if (child === 'manifest.json' || skip.has(child)) continue;
@@ -236,23 +246,27 @@ function readPackFile(root, relative, maxBytes, label) {
     throw error;
   }
   if (!stat.isFile()) throw new Error(`${label}需要是普通文件。`);
-  if (stat.size > maxBytes) throw new Error(`${label}不能超过 ${Math.round(maxBytes / 1024 / 1024)} MB。`);
+  if (stat.size > maxBytes) throw codedError(`${label}不能超过 ${Math.round(maxBytes / 1024 / 1024)} MB。`, 'ZIP_LIMIT');
   const bytes = fs.readFileSync(resolved);
-  if (bytes.length > maxBytes) throw new Error(`${label}不能超过 ${Math.round(maxBytes / 1024 / 1024)} MB。`);
+  if (bytes.length > maxBytes) throw codedError(`${label}不能超过 ${Math.round(maxBytes / 1024 / 1024)} MB。`, 'ZIP_LIMIT');
   return bytes;
 }
 
-function assertNoSymlinks(root) {
+function assertNoSymlinks(root, options = {}) {
+  const maxEntries = options.maxEntries ?? SKIN_PACK_LIMITS.maxFolderEntries;
   const pending = [root];
+  let entries = 0;
   while (pending.length) {
     const directory = pending.pop();
     for (const name of fs.readdirSync(directory)) {
+      entries += 1;
+      if (entries > maxEntries) {
+        throw codedError(`皮肤包文件夹里的文件或目录超过 ${maxEntries} 个，已拒绝导入；请只选择包含 manifest.json 和角色图片的文件夹。`, 'ZIP_ENTRY_LIMIT');
+      }
       const full = path.join(directory, name);
       const stat = fs.lstatSync(full);
       if (stat.isSymbolicLink()) {
-        const error = new Error(`皮肤包文件夹包含符号链接或目录联接：${path.relative(root, full)}，已拒绝。`);
-        error.code = 'ZIP_SYMLINK';
-        throw error;
+        throw codedError(`皮肤包文件夹包含符号链接或目录联接：${path.relative(root, full)}，已拒绝。`, 'ZIP_SYMLINK');
       }
       if (stat.isDirectory()) pending.push(full);
     }
@@ -403,18 +417,14 @@ class SkinPackLibrary {
       const imageBytes = readPackFile(source, character.image, SKIN_PACK_LIMITS.maxImageBytes, `角色“${character.name}”的图片`);
       totalBytes += imageBytes.length;
       if (totalBytes > SKIN_PACK_LIMITS.maxTotalBytes) {
-        const error = new Error('皮肤包总大小超过 200 MB。');
-        error.code = 'ZIP_LIMIT';
-        throw error;
+        throw codedError('皮肤包总大小超过 200 MB。', 'ZIP_LIMIT');
       }
       writePackFile(target, character.image, imageBytes);
       if (character.thumbnail) {
         const thumbnailBytes = readPackFile(source, character.thumbnail, THUMBNAIL_SPEC.maxBytes, `角色“${character.name}”的缩略图`);
         totalBytes += thumbnailBytes.length;
         if (totalBytes > SKIN_PACK_LIMITS.maxTotalBytes) {
-          const error = new Error('皮肤包总大小超过 200 MB。');
-          error.code = 'ZIP_LIMIT';
-          throw error;
+          throw codedError('皮肤包总大小超过 200 MB。', 'ZIP_LIMIT');
         }
         writePackFile(target, character.thumbnail, thumbnailBytes);
       }
@@ -443,7 +453,7 @@ class SkinPackLibrary {
         totalBytes += thumbnailBytes.length;
         await validateImage(thumbnailBytes, FORMATS[thumbnailFormat]);
       }
-      if (totalBytes > SKIN_PACK_LIMITS.maxTotalBytes) throw new Error('皮肤包总大小超过 200 MB。');
+      if (totalBytes > SKIN_PACK_LIMITS.maxTotalBytes) throw codedError('皮肤包总大小超过 200 MB。', 'ZIP_LIMIT');
       sources.push({ character, imageBytes, extension, thumbnailBytes, thumbnailFormat });
     }
     const id = packContentId(manifest, sources);
@@ -539,7 +549,7 @@ class SkinPackLibrary {
         validateThumbnail(thumbnailBytes);
         totalBytes += thumbnailBytes.length;
       }
-      if (totalBytes > SKIN_PACK_LIMITS.maxTotalBytes) throw new Error('皮肤包总大小超过 200 MB。');
+      if (totalBytes > SKIN_PACK_LIMITS.maxTotalBytes) throw codedError('皮肤包总大小超过 200 MB。', 'ZIP_LIMIT');
       sources.push({ character, imageBytes, thumbnailBytes });
     }
     const id = packContentId(manifest, sources);
@@ -681,5 +691,6 @@ module.exports = {
   safeRelativePath,
   sweepTransientDirs,
   findManifestDirectory,
+  assertNoSymlinks,
   packContentId
 };
