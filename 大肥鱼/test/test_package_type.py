@@ -27,9 +27,9 @@ class PackageTypeTests(unittest.TestCase):
         self.manifest = {'bytes': len(payload), 'sha256': hashlib.sha256(payload).hexdigest()}
         (self.project / 'runtime-manifest.json').write_text(json.dumps(self.manifest), encoding='utf-8')
         for name, value in {
-            'plugin.json': {'version': '3.3.2'},
-            '.codex-plugin/plugin.json': {'version': '3.3.2'},
-            'package.json': {'version': '3.3.2'},
+            'plugin.json': {'version': '3.4.0'},
+            '.codex-plugin/plugin.json': {'version': '3.4.0'},
+            'package.json': {'version': '3.4.0'},
             'mcp.json': {'mcpServers': {'codex-pet': {'cwd': './', 'env': {'DAFEIYU_DESKTOP_ONLY': '1'}, 'args': []}}},
             '.mcp.json': {'mcpServers': {'codex-pet': {'cwd': './', 'env': {'DAFEIYU_DESKTOP_ONLY': '1'}, 'args': []}}},
         }.items():
@@ -51,7 +51,7 @@ class PackageTypeTests(unittest.TestCase):
         subprocess.run(['git', '-C', str(self.project), 'add', '.'], check=True)
         return subprocess.run([sys.executable, str(SOURCE_SCRIPT), '--root', str(self.project), '--output', str(output)], text=True, capture_output=True)
 
-    def run_package(self, output, runtime=None, original=None, version='3.3.2'):
+    def run_package(self, output, runtime=None, original=None, version='3.4.0'):
         command = [sys.executable, str(PACKAGE_SCRIPT), '--root', str(self.project), '--output', str(output), '--verify-directory', str(self.base / ('verify-' + output.stem)), '--metadata-directory', str(self.base / 'metadata'), '--version', version]
         if runtime is not None:
             command += ['--runtime-archive', str(runtime)]
@@ -71,7 +71,7 @@ class PackageTypeTests(unittest.TestCase):
                            encoding='utf-8', newline='\n')
 
     def build_both_packages(self, complete_name='complete.zip', source_name='source.zip',
-                            directory=None, version='3.3.2'):
+                            directory=None, version='3.4.0'):
         directory = Path(directory or self.base)
         directory.mkdir(parents=True, exist_ok=True)
         complete = directory / complete_name
@@ -190,6 +190,23 @@ class PackageTypeTests(unittest.TestCase):
         self.assertEqual(raw, (report['sha256'] + '  default-version.zip\n').encode('utf-8'))
         self.assertTrue((self.base / 'metadata' / 'default-version.zip.sha256').is_file())
         self.assertFalse((self.base / 'metadata' / 'SHA256SUMS').exists())
+
+    def test_write_sha256sums_rejects_a_package_version_mismatch(self):
+        # The asset file names carry --version, so a package built as 3.3.2 must
+        # not be published under 3.4.0 names.
+        for name in ('plugin.json', '.codex-plugin/plugin.json', 'package.json'):
+            file = self.project / name
+            value = json.loads(file.read_text(encoding='utf-8'))
+            value['version'] = '3.3.2'
+            file.write_text(json.dumps(value), encoding='utf-8')
+        complete, source = self.build_both_packages(version='3.3.2')
+        output = self.base / 'release' / 'SHA256SUMS'
+        result = self.run_sums(complete, source, output)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('version mismatch', result.stderr)
+        self.assertIn('3.3.2', result.stderr)
+        self.assertIn('3.4.0', result.stderr)
+        self.assertFalse(output.exists())
 
     def test_write_sha256sums_aggregates_both_assets_with_final_names(self):
         complete = self.base / 'complete.zip'

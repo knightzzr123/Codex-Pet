@@ -38,10 +38,12 @@ def sidecar_hash(file):
     return match.group(1)
 
 
-def package_type(file):
+def package_info(file):
+    """Read the package type and the internal version the ZIP was built with."""
     try:
         with zipfile.ZipFile(file) as archive:
-            markers = [name for name in archive.namelist()
+            names = archive.namelist()
+            markers = [name for name in names
                        if name == 'PACKAGE-TYPE.json' or name.endswith('/PACKAGE-TYPE.json')]
             if len(markers) != 1:
                 raise SystemExit(
@@ -51,19 +53,42 @@ def package_type(file):
                 marker = json.loads(archive.read(markers[0]))
             except ValueError:
                 raise SystemExit(f'Invalid PACKAGE-TYPE.json: {file}')
+            if not isinstance(marker, dict) or not isinstance(marker.get('packageType'), str):
+                raise SystemExit(f'Invalid PACKAGE-TYPE.json: {file}')
+            marker_version = marker.get('version')
+            if marker_version is not None and not isinstance(marker_version, str):
+                raise SystemExit(f'Invalid version in PACKAGE-TYPE.json: {file}')
+            # The package.json next to the marker is the authoritative build
+            # version for both package types. package.py stamps it from --version
+            # and package-source.py copies the source tree's package.json.
+            prefix = markers[0][:-len('PACKAGE-TYPE.json')]
+            manifest_name = prefix + 'package.json'
+            manifest_version = None
+            if manifest_name in names:
+                try:
+                    manifest = json.loads(archive.read(manifest_name))
+                except ValueError:
+                    raise SystemExit(f'Invalid package.json in release asset: {file}')
+                if isinstance(manifest, dict) and isinstance(manifest.get('version'), str):
+                    manifest_version = manifest['version']
+            if marker_version is not None and manifest_version is not None \
+                    and marker_version != manifest_version:
+                raise SystemExit(
+                    f'Package version metadata is inconsistent: {file} has '
+                    f'PACKAGE-TYPE.json {marker_version} but package.json {manifest_version}.')
     except zipfile.BadZipFile:
         raise SystemExit(f'Release asset is not a readable ZIP: {file}')
-    if not isinstance(marker, dict) or not isinstance(marker.get('packageType'), str):
-        raise SystemExit(f'Invalid PACKAGE-TYPE.json: {file}')
-    return marker['packageType']
+    return {
+        'packageType': marker['packageType'],
+        'version': manifest_version if manifest_version is not None else marker_version,
+    }
 
 
-def require_package_type(file, expected, flag):
-    actual = package_type(file)
-    if actual != expected:
+def require_package_type(info, file, expected, flag):
+    if info['packageType'] != expected:
         raise SystemExit(
             f'Release asset type mismatch: {flag} expects a {expected} package but '
-            f'{file} is a {actual} package. Check that --complete and --source are not swapped.')
+            f'{file} is a {info["packageType"]} package. Check that --complete and --source are not swapped.')
 
 
 version = args.version
@@ -82,8 +107,20 @@ for file in (complete, source):
 # The asset names are derived from the flags, so a swapped --complete/--source
 # would publish the two hashes under each other's names. Verify the markers
 # packaged next to each ZIP before writing anything.
-require_package_type(complete, 'complete', '--complete')
-require_package_type(source, 'source', '--source')
+complete_info = package_info(complete)
+source_info = package_info(source)
+require_package_type(complete_info, complete, 'complete', '--complete')
+require_package_type(source_info, source, 'source', '--source')
+# The file names carry --version, so it must be the version actually packaged;
+# otherwise a release would advertise hashes for a differently built ZIP.
+for info, file in ((complete_info, complete), (source_info, source)):
+    if info['version'] is None:
+        raise SystemExit(f'Cannot determine the internal version packaged in {file}; rebuild it with --version.')
+    if info['version'] != version:
+        raise SystemExit(
+            f'Release asset version mismatch: {file} was built as {info["version"]} but '
+            f'SHA256SUMS uses {version}. Rebuild the asset with --version {version} '
+            f'or pass --version {info["version"]}.')
 for file in (complete, source):
     if sidecar_hash(file) != digest(file):
         raise SystemExit(f'Sidecar checksum does not match: {file}')
