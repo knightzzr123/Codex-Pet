@@ -451,6 +451,38 @@ test('文件夹导入在预览后出现符号链接时拒绝并清理快照', as
   assert.deepEqual(unzipNames(library), []);
 });
 
+test('文件夹导入在预览后引用图片被换成指向包外的符号链接时拒绝为 ZIP_SYMLINK', async t => {
+  const root = temporary(t);
+  const { library, session } = sessionFor(root);
+  const directory = writePack(root, 45, '替换链接包', { id: 'replaced-link-pack' });
+  const outside = path.join(root, 'outside-replaced.png');
+  fs.writeFileSync(outside, png(46));
+  const registered = session.register(directory, 1);
+  const preview = await session.preview(registered.token, 1);
+  assert.equal(preview.ok, true, preview.error);
+
+  // 预览后把引用图片换成指向包外的符号链接，再提交导入。
+  const image = path.join(directory, 'whale.png');
+  fs.renameSync(image, path.join(root, 'moved-inside.png'));
+  fs.symlinkSync(outside, image, 'file');
+
+  const committed = await session.commit(registered.token, 1);
+  assert.equal(committed.ok, false);
+  assert.equal(committed.code, 'ZIP_SYMLINK');
+  assert.match(committed.error, /符号链接|目录联接/);
+  assert.equal(library.list().length, 0);
+  assert.deepEqual(unzipNames(library), []);
+
+  // realpath 校验不能误伤普通文件：另一个正常皮肤包仍可读取并导入。
+  const normal = writePack(root, 47, '正常读取包', { id: 'normal-read-pack' });
+  const second = session.register(normal, 1);
+  assert.equal((await session.preview(second.token, 1)).ok, true);
+  const imported = await session.commit(second.token, 1);
+  assert.equal(imported.ok, true, imported.error);
+  assert.equal(library.list().length, 1);
+  assert.deepEqual(unzipNames(library), []);
+});
+
 test('文件夹导入的单图 20 MB 上限仍然生效', async t => {
   const root = temporary(t);
   const { library, session } = sessionFor(root);

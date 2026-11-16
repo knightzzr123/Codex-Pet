@@ -299,6 +299,94 @@ test('assertNoSymlinks 不读、不计数无关目录（2100 个文件也不进�
   assert.deepEqual(calls.filter(call => call === huge || call.startsWith(huge + path.sep)), []);
 });
 
+test('readPackFile 读取前用 realpath 确认仍在包内：落到包外给 ZIP_SYMLINK，正常文件仍可读取', async t => {
+  const root = temporary(t);
+  const outside = fs.mkdtempSync(path.join(root, 'outside-'));
+  const outsideImage = path.join(outside, 'whale.png');
+  fs.writeFileSync(outsideImage, png(999, 999, 9));
+  const source = writePack(root, {
+    name: '真实路径包',
+    characters: [{ id: 'whale', name: '鲸鱼', image: 'whale.png' }]
+  });
+  const library = new SkinPackLibrary(root);
+  const insideImage = path.join(source, 'whale.png');
+  const insideBytes = fs.readFileSync(insideImage);
+
+  // 正常文件照常读取：realpath 校验不能误伤包内文件。
+  const identified = await library.identifyDirectory(source);
+  assert.equal(identified.sources.length, 1);
+  assert.deepEqual(identified.sources[0].imageBytes, insideBytes);
+
+  const realpath = fs.realpathSync;
+  const readFile = fs.readFileSync;
+  const imageReal = realpath.call(fs, insideImage);
+  const outsideReal = realpath.call(fs, outsideImage);
+  const reads = [];
+  t.mock.method(fs, 'readFileSync', function (target, ...args) {
+    reads.push(path.resolve(String(target)));
+    return readFile.call(fs, target, ...args);
+  });
+  // 模拟「检查之后、读取之前」引用图片被换成指向包外的链接：lstat 仍然看到
+  // 普通文件，realpath 却已经落到包外，必须在读取前按 ZIP_SYMLINK 拒绝。
+  t.mock.method(fs, 'realpathSync', function (target, ...args) {
+    const value = path.resolve(String(target));
+    if (value === insideImage || value === imageReal) return outsideReal;
+    return realpath.call(fs, target, ...args);
+  });
+  await assert.rejects(() => library.importDirectory(source, async () => {}), error => {
+    assert.ok(typeof error.code === 'string' && error.code.startsWith('ZIP_'), `未分类错误码: ${error.code}`);
+    assert.equal(error.code, 'ZIP_SYMLINK');
+    assert.match(error.message, /符号链接|目录联接/);
+    return true;
+  });
+  assert.equal(library.list().length, 0);
+  assert.deepEqual(reads.filter(target => target === outsideReal || target === outsideImage), [],
+    '包外文件不应被读取');
+});
+
+test('readPackFile 在 realpath 出错时返回 ZIP_ 错误码，不抛未分类异常', async t => {
+  const root = temporary(t);
+  const source = writePack(root, {
+    name: '真实路径错误包',
+    characters: [{ id: 'whale', name: '鲸鱼', image: 'whale.png' }]
+  });
+  const library = new SkinPackLibrary(root);
+  const realpath = fs.realpathSync;
+  const image = path.join(source, 'whale.png');
+  const failRealpathWith = code => t.mock.method(fs, 'realpathSync', function (target, ...args) {
+    if (path.resolve(String(target)) === path.resolve(image)) {
+      throw Object.assign(new Error(`mock ${code}`), { code });
+    }
+    return realpath.call(fs, target, ...args);
+  });
+
+  failRealpathWith('ENOENT');
+  await assert.rejects(() => library.importDirectory(source, async () => {}), error => {
+    assert.ok(typeof error.code === 'string' && error.code.startsWith('ZIP_'), `未分类错误码: ${error.code}`);
+    assert.equal(error.code, 'ZIP_FORMAT');
+    assert.match(error.message, /皮肤包缺少文件/);
+    return true;
+  });
+  t.mock.restoreAll();
+
+  failRealpathWith('EACCES');
+  await assert.rejects(() => library.importDirectory(source, async () => {}), error => {
+    assert.ok(typeof error.code === 'string' && error.code.startsWith('ZIP_'), `未分类错误码: ${error.code}`);
+    assert.equal(error.code, 'ZIP_ACCESS');
+    assert.match(error.message, /没有权限读取皮肤包里的文件/);
+    return true;
+  });
+  t.mock.restoreAll();
+
+  failRealpathWith('ELOOP');
+  await assert.rejects(() => library.importDirectory(source, async () => {}), error => {
+    assert.ok(typeof error.code === 'string' && error.code.startsWith('ZIP_'), `未分类错误码: ${error.code}`);
+    assert.equal(error.code, 'ZIP_SYMLINK');
+    return true;
+  });
+  t.mock.restoreAll();
+});
+
 test('多角色选择链接可稳定解析，非法链接返回 null', () => {
   const id = packCharacterId('a'.repeat(64), 'whale');
   assert.equal(id, `pack:${'a'.repeat(64)}:whale`);

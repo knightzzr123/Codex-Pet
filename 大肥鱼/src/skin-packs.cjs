@@ -295,18 +295,66 @@ function atomicWrite(file, contents) {
   }
 }
 
-function readPackFile(root, relative, maxBytes, label) {
-  const resolved = path.resolve(root, relative);
-  if (resolved !== root && !resolved.startsWith(root + path.sep)) throw new Error(`${label}不能跳出皮肤包目录。`);
-  const stat = fs.lstatSync(resolved);
-  if (stat.isSymbolicLink()) {
-    const error = new Error(`${label}不能是符号链接或目录联接。`);
-    error.code = 'ZIP_SYMLINK';
-    throw error;
+// path.relative() is the only containment test used for real paths: a result
+// that is absolute or climbs out with ".." means the target left the pack.
+// Windows is not case sensitive and accepts both separators, so the comparison
+// folds case there (path.win32.relative already does this itself, but doing it
+// explicitly keeps drive-letter casing and "/" vs "\" from ever faking an
+// escape) and normalises separators before looking for a leading "..".
+function insideDirectory(directory, target) {
+  const fold = process.platform === 'win32' ? value => value.toLowerCase() : value => value;
+  const relative = path.relative(fold(directory), fold(target));
+  if (path.isAbsolute(relative)) return false;
+  const normalized = relative.replace(/[\\/]+/g, '/');
+  return normalized !== '..' && !normalized.startsWith('../');
+}
+
+function missingPackFile(label) {
+  return codedError(`皮肤包缺少文件：${label}`, 'ZIP_FORMAT');
+}
+
+// Resolve the real path of a referenced file and refuse it unless it still
+// sits inside the real path of the pack. The lstat/normal-file checks above are
+// a separate (and still required) guard: realpath() also collapses a file that
+// was swapped for a symlink *after* those checks ran, so a pack that is edited
+// between preview and import cannot make us read a file from outside the pack.
+function packFileRealPath(root, resolved, label) {
+  let realRoot;
+  try { realRoot = fs.realpathSync(root); }
+  catch (error) {
+    if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') throw missingPackFile(label);
+    if (error?.code === 'ELOOP') throw codedError(`${label}不能是符号链接或目录联接。`, 'ZIP_SYMLINK');
+    throw codedError(`没有权限读取皮肤包文件夹：${label}`, 'ZIP_ACCESS');
   }
-  if (!stat.isFile()) throw new Error(`${label}需要是普通文件。`);
+  let realTarget;
+  try { realTarget = fs.realpathSync(resolved); }
+  catch (error) {
+    if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') throw missingPackFile(label);
+    if (error?.code === 'ELOOP') throw codedError(`${label}不能是符号链接或目录联接。`, 'ZIP_SYMLINK');
+    throw codedError(`没有权限读取皮肤包里的文件：${label}`, 'ZIP_ACCESS');
+  }
+  if (!insideDirectory(realRoot, realTarget)) {
+    throw codedError(`${label}不能指向皮肤包外的符号链接或目录联接。`, 'ZIP_SYMLINK');
+  }
+  return realTarget;
+}
+
+function readPackFile(root, relative, maxBytes, label) {
+  const base = path.resolve(root);
+  const resolved = path.resolve(base, relative);
+  if (!insideDirectory(base, resolved)) throw codedError(`${label}不能跳出皮肤包目录。`, 'ZIP_FORMAT');
+  let stat;
+  try { stat = fs.lstatSync(resolved); }
+  catch (error) {
+    if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') throw missingPackFile(label);
+    throw codedError(`没有权限读取皮肤包里的文件：${label}`, 'ZIP_ACCESS');
+  }
+  if (stat.isSymbolicLink()) throw codedError(`${label}不能是符号链接或目录联接。`, 'ZIP_SYMLINK');
+  if (!stat.isFile()) throw codedError(`${label}需要是普通文件。`, 'ZIP_FORMAT');
   if (stat.size > maxBytes) throw codedError(`${label}不能超过 ${Math.round(maxBytes / 1024 / 1024)} MB。`, 'ZIP_LIMIT');
-  const bytes = fs.readFileSync(resolved);
+  // Read through the resolved real path, not the manifest-provided path.
+  const realTarget = packFileRealPath(base, resolved, label);
+  const bytes = fs.readFileSync(realTarget);
   if (bytes.length > maxBytes) throw codedError(`${label}不能超过 ${Math.round(maxBytes / 1024 / 1024)} MB。`, 'ZIP_LIMIT');
   return bytes;
 }
