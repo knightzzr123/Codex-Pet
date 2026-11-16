@@ -431,8 +431,9 @@ test('readPackFile 在 realpath 出错时返回 ZIP_ 错误码，不抛未分类
 
   failRealpathWith('ENOENT');
   await assert.rejects(() => library.importDirectory(source, async () => {}), error => {
-    assert.ok(typeof error.code === 'string' && error.code.startsWith('ZIP_'), `未分类错误码: ${error.code}`);
-    assert.equal(error.code, 'ZIP_FORMAT');
+    // A missing referenced file is a pack validation failure, not a damaged
+    // archive: it keeps its own code so the exact reason reaches the UI.
+    assert.equal(error.code, 'PACK_INVALID');
     assert.match(error.message, /皮肤包缺少文件/);
     return true;
   });

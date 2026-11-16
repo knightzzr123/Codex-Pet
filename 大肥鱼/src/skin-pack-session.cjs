@@ -22,13 +22,23 @@ const MESSAGES = Object.freeze({
   ZIP_SENDER: '只有设置窗口可以导入皮肤包。',
   TOKEN_INVALID: '这个导入凭证无效、已过期或已使用。',
   PACK_CHANGED: '皮肤包在预览之后被改过，请重新选择。',
+  // Pack layout / manifest validation is a different failure from a damaged
+  // archive: its exact Chinese reason is handed through, and this is only the
+  // fallback for an error that carries no readable message.
+  PACK_INVALID: '这个皮肤包不符合导入要求，请检查后重试。',
+  ZIP_MANIFEST_MISSING: '没有找到 manifest.json，请确认皮肤包里有一份 manifest.json。',
+  ZIP_MANIFEST_MULTIPLE: '皮肤包里有多个 manifest.json，请只保留一份。',
   ZIP_HEADER: DAMAGED_ARCHIVE,
   ZIP_CRC: DAMAGED_ARCHIVE,
   ZIP_FORMAT: DAMAGED_ARCHIVE
 });
 
-// Codes whose details are never handed to the renderer.
+// Only the zip-reader's structural errors are opaque: their parser detail is
+// logged instead of shown, and the UI reads one fixed sentence for all three.
+// Every other code keeps its specific Chinese reason (PACK_INVALID included).
 const OPAQUE_CODES = new Set(['ZIP_HEADER', 'ZIP_CRC', 'ZIP_FORMAT']);
+
+const CHINESE = /[\u4e00-\u9fff]/;
 
 function limitMessage(detail) {
   const base = detail || MESSAGES.ZIP_LIMIT;
@@ -39,7 +49,11 @@ function limitMessage(detail) {
 function fail(code, error) {
   if (OPAQUE_CODES.has(code)) return { ok: false, code, error: MESSAGES[code] };
   if (code === 'ZIP_LIMIT') return { ok: false, code, error: limitMessage(error) };
-  return { ok: false, code, error: error || MESSAGES[code] || MESSAGES.ZIP_FORMAT };
+  // A concrete Chinese reason is always more useful than a generic sentence.
+  // A non-Chinese message here is an OS/internal detail, so it is replaced by
+  // the code's own copy instead of leaking e.g. "EACCES: permission denied".
+  const detail = typeof error === 'string' && CHINESE.test(error) ? error : '';
+  return { ok: false, code, error: detail || MESSAGES[code] || MESSAGES.PACK_INVALID };
 }
 
 function isRejectedPath(value) {
@@ -112,12 +126,17 @@ function createSkinPackSession(options = {}) {
   const tokens = new Map();
   let order = 0;
 
-  function errorCode(error, fallback = 'ZIP_FORMAT') {
+  // Anything that is not a zip-reader structural code and not PACK_CHANGED is
+  // a skin-packs validation failure; it must never be flattened into the
+  // damaged-archive code.
+  function errorCode(error, fallback = 'PACK_INVALID') {
     const code = typeof error?.code === 'string' ? error.code : fallback;
-    return code.startsWith('ZIP_') || code === 'PACK_CHANGED' ? code : fallback;
+    return code.startsWith('ZIP_') || code === 'PACK_CHANGED' || code === 'PACK_INVALID'
+      ? code
+      : fallback;
   }
 
-  function report(error, fallback = 'ZIP_FORMAT') {
+  function report(error, fallback = 'PACK_INVALID') {
     const code = errorCode(error, fallback);
     if (OPAQUE_CODES.has(code)) {
       try { onDiagnostic({ event: 'skin-pack-error', code, detail: error?.message || '' }); }

@@ -599,6 +599,47 @@ test('预览返回错误码时焦点回到拖拽区，损坏格式只显示统�
   assert.equal(f.doc.activeElement, f.get('settings-zip-drop'));
 });
 
+test('皮肤包校验失败显示具体原因，不显示「压缩包已损坏」', async () => {
+  const reasons = [
+    '皮肤包缺少文件：whale.png',
+    '皮肤包至少需要 1 个角色。',
+    '皮肤包清单版本不支持：99（本版本仅支持 1）。',
+    '角色“鲸鱼”的图片格式不受支持。',
+    '文件夹不存在，请重新选择皮肤包文件夹。'
+  ];
+  for (const reason of reasons) {
+    const f = fixture();
+    const assertive = liveRecorder(f, 'settings-live-assertive');
+    f.api.previewSkinPack = async () => ({ ok: false, code: 'PACK_INVALID', error: reason });
+    await f.window.__settingsTest.previewToken('1'.repeat(32));
+    assert.equal(f.get('settings-drop-detail').textContent, reason);
+    assert.notEqual(f.get('settings-drop-detail').textContent, '压缩包已损坏或格式不受支持，请重新打包后再试。');
+    assert.deepEqual(assertive.writes, [reason]);
+    assert.equal(f.doc.activeElement, f.get('settings-zip-drop'));
+  }
+});
+
+test('manifest 缺失与重复各有独立文案，不显示成压缩包损坏', async () => {
+  const missing = fixture();
+  missing.api.previewSkinPack = async () => ({ ok: false, code: 'ZIP_MANIFEST_MISSING' });
+  await missing.window.__settingsTest.previewToken('2'.repeat(32));
+  assert.equal(missing.get('settings-drop-detail').textContent,
+    '没有找到 manifest.json，请确认皮肤包里有一份 manifest.json。');
+
+  const multiple = fixture();
+  multiple.api.previewSkinPack = async () => ({ ok: false, code: 'ZIP_MANIFEST_MULTIPLE' });
+  await multiple.window.__settingsTest.previewToken('3'.repeat(32));
+  assert.equal(multiple.get('settings-drop-detail').textContent,
+    '皮肤包里有多个 manifest.json，请只保留一份。');
+
+  assert.notEqual(missing.get('settings-drop-detail').textContent,
+    multiple.get('settings-drop-detail').textContent);
+  for (const f of [missing, multiple]) {
+    assert.notEqual(f.get('settings-drop-detail').textContent,
+      '压缩包已损坏或格式不受支持，请重新打包后再试。');
+  }
+});
+
 test('大小超限提示追加「请减小图片后再试」，技术错误不外泄', async () => {
   const f = fixture();
   f.api.previewSkinPack = async () => ({ ok: false, code: 'ZIP_LIMIT', error: '皮肤包总大小超过 200 MB。' });

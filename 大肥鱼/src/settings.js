@@ -384,18 +384,28 @@ function isHiddenDeep(node) {
 
 const DAMAGED_ARCHIVE = '压缩包已损坏或格式不受支持，请重新打包后再试。';
 
+// Only a zip-reader structural failure gets the one damaged-archive sentence.
+// Pack validation and manifest-layout codes keep their own copy (the exact
+// Chinese reason from the main process when it sent one).
+const IMPORT_FALLBACKS = Object.freeze({
+  PACK_INVALID: '这个皮肤包不符合导入要求，请检查后重试。',
+  ZIP_MANIFEST_MISSING: '没有找到 manifest.json，请确认皮肤包里有一份 manifest.json。',
+  ZIP_MANIFEST_MULTIPLE: '皮肤包里有多个 manifest.json，请只保留一份。',
+  ZIP_ACCESS: '没有权限读取皮肤包里的文件。'
+});
+
 // The main process already maps these codes, but the renderer keeps the last
 // word on what the user reads: a parser detail or an English OS error must
 // never appear in the drop zone.
 function importErrorMessage(result) {
   const code = result?.code || '';
-  const message = typeof result?.error === 'string' ? result.error : '';
+  const message = typeof result?.error === 'string' ? result.error.trim() : '';
   if (code === 'ZIP_HEADER' || code === 'ZIP_CRC' || code === 'ZIP_FORMAT') return DAMAGED_ARCHIVE;
   if (code === 'ZIP_LIMIT') {
     if (message.includes('请减小图片')) return message;
     return `${message ? message.replace(/[。.]?$/, '。') : '压缩包超过大小上限，'}请减小图片后再试。`;
   }
-  return message || '无法导入这个皮肤包。';
+  return message || IMPORT_FALLBACKS[code] || '无法导入这个皮肤包。';
 }
 
 function rejectPack(result) {

@@ -9,6 +9,8 @@ const { SkinPackLibrary } = require('../src/skin-packs.cjs');
 const { MANIFEST_VERSION } = require('../src/manifests.cjs');
 const { createSkinPackSession, TOKEN_TTL_MS, classifySkinPackPath } = require('../src/skin-pack-session.cjs');
 
+const DAMAGED_ARCHIVE = '压缩包已损坏或格式不受支持，请重新打包后再试。';
+
 function png(seed = 1) {
   const bytes = Buffer.alloc(48);
   Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).copy(bytes, 0);
@@ -726,6 +728,107 @@ test('不是 ZIP 的文件同样只显示统一中文提示', async t => {
   assert.equal(preview.error, '压缩包已损坏或格式不受支持，请重新打包后再试。');
   assert.equal(diagnostics.length, 1);
   assert.equal(diagnostics[0].code, 'ZIP_FORMAT');
+});
+
+test('文件夹包缺少被引用图片时显示具体原因而不是压缩包损坏', async t => {
+  const root = temporary(t);
+  const { session } = sessionFor(root);
+  const directory = writePack(root, 50, '缺图包');
+  fs.rmSync(path.join(directory, 'whale.png'));
+  const registered = session.register(directory, 1);
+  const preview = await session.preview(registered.token, 1);
+  assert.equal(preview.ok, false);
+  assert.equal(preview.code, 'PACK_INVALID');
+  assert.equal(preview.error, '皮肤包缺少文件：whale.png');
+  assert.notEqual(preview.error, DAMAGED_ARCHIVE);
+});
+
+test('角色列表为空时显示具体原因而不是压缩包损坏', async t => {
+  const root = temporary(t);
+  const { session } = sessionFor(root);
+  const directory = fs.mkdtempSync(path.join(root, 'pack-'));
+  fs.writeFileSync(path.join(directory, 'manifest.json'), JSON.stringify({
+    manifestVersion: MANIFEST_VERSION, name: '空角色包', version: '1.0.0', characters: []
+  }));
+  const registered = session.register(directory, 1);
+  const preview = await session.preview(registered.token, 1);
+  assert.equal(preview.ok, false);
+  assert.equal(preview.code, 'PACK_INVALID');
+  assert.match(preview.error, /至少需要 1 个角色/);
+  assert.notEqual(preview.error, DAMAGED_ARCHIVE);
+});
+
+test('manifestVersion=99 时显示具体原因而不是压缩包损坏', async t => {
+  const root = temporary(t);
+  const { session } = sessionFor(root);
+  const directory = writePack(root, 51, '新版本清单');
+  fs.writeFileSync(path.join(directory, 'manifest.json'), JSON.stringify({
+    manifestVersion: 99, name: '新版本清单', version: '1.0.0',
+    characters: [{ id: 'whale', name: '鲸鱼', image: 'whale.png' }]
+  }));
+  const registered = session.register(directory, 1);
+  const preview = await session.preview(registered.token, 1);
+  assert.equal(preview.ok, false);
+  assert.equal(preview.code, 'PACK_INVALID');
+  assert.match(preview.error, /版本不支持/);
+  assert.match(preview.error, /99/);
+  assert.notEqual(preview.error, DAMAGED_ARCHIVE);
+});
+
+test('图片不是真图片时显示具体原因而不是压缩包损坏', async t => {
+  const root = temporary(t);
+  const { session } = sessionFor(root);
+  const directory = writePack(root, 52, '假图片包');
+  fs.writeFileSync(path.join(directory, 'whale.png'), Buffer.from('still not a png'));
+  const registered = session.register(directory, 1);
+  const preview = await session.preview(registered.token, 1);
+  assert.equal(preview.ok, false);
+  assert.equal(preview.code, 'PACK_INVALID');
+  assert.match(preview.error, /图片格式不受支持/);
+  assert.notEqual(preview.error, DAMAGED_ARCHIVE);
+});
+
+test('截断的 ZIP 仍只显示统一损坏文案，技术细节进诊断', async t => {
+  const root = temporary(t);
+  const diagnostics = [];
+  const { session } = sessionFor(root, { onDiagnostic: entry => diagnostics.push(entry) });
+  const file = writeZip(root, 53);
+  const original = fs.readFileSync(file);
+  fs.writeFileSync(file, original.subarray(0, original.length - 12));
+  const registered = session.register(file, 1);
+  const preview = await session.preview(registered.token, 1);
+  assert.equal(preview.ok, false);
+  assert.equal(preview.code, 'ZIP_FORMAT');
+  assert.equal(preview.error, DAMAGED_ARCHIVE);
+  assert.equal(diagnostics.length, 1);
+  assert.equal(diagnostics[0].code, 'ZIP_FORMAT');
+});
+
+test('文件夹包缺少 manifest.json 时有独立文案', async t => {
+  const root = temporary(t);
+  const { session } = sessionFor(root);
+  const directory = fs.mkdtempSync(path.join(root, 'pack-'));
+  fs.writeFileSync(path.join(directory, 'whale.png'), png(54));
+  const registered = session.register(directory, 1);
+  const preview = await session.preview(registered.token, 1);
+  assert.equal(preview.ok, false);
+  assert.equal(preview.code, 'ZIP_MANIFEST_MISSING');
+  assert.match(preview.error, /没找到 manifest\.json/);
+  assert.notEqual(preview.error, DAMAGED_ARCHIVE);
+});
+
+test('文件夹包有多份 manifest.json 时有独立文案', async t => {
+  const root = temporary(t);
+  const { session } = sessionFor(root);
+  const directory = writePack(root, 55, '多清单包');
+  fs.mkdirSync(path.join(directory, 'nested'));
+  fs.copyFileSync(path.join(directory, 'manifest.json'), path.join(directory, 'nested', 'manifest.json'));
+  const registered = session.register(directory, 1);
+  const preview = await session.preview(registered.token, 1);
+  assert.equal(preview.ok, false);
+  assert.equal(preview.code, 'ZIP_MANIFEST_MULTIPLE');
+  assert.match(preview.error, /多份 manifest\.json/);
+  assert.notEqual(preview.error, DAMAGED_ARCHIVE);
 });
 
 test('引用文件所在目录无权限时给 ZIP_ACCESS 中文提示', {

@@ -311,8 +311,11 @@ function insideDirectory(directory, target) {
   return normalized !== '..' && !normalized.startsWith('../');
 }
 
+// Pack validation failures are not damaged archives: they carry the exact
+// Chinese reason through to the settings window under their own code, so the
+// user reads "皮肤包缺少文件：x" instead of the generic 压缩包已损坏 message.
 function missingPackFile(label) {
-  return codedError(`皮肤包缺少文件：${label}`, 'ZIP_FORMAT');
+  return codedError(`皮肤包缺少文件：${label}`, 'PACK_INVALID');
 }
 
 // Resolve the real path of a referenced file and refuse it unless it still
@@ -344,7 +347,7 @@ function packFileRealPath(root, resolved, label) {
 function readPackFile(root, relative, maxBytes, label) {
   const base = path.resolve(root);
   const resolved = path.resolve(base, relative);
-  if (!insideDirectory(base, resolved)) throw codedError(`${label}不能跳出皮肤包目录。`, 'ZIP_FORMAT');
+  if (!insideDirectory(base, resolved)) throw codedError(`${label}不能跳出皮肤包目录。`, 'PACK_INVALID');
   let stat;
   try { stat = fs.lstatSync(resolved); }
   catch (error) {
@@ -352,7 +355,7 @@ function readPackFile(root, relative, maxBytes, label) {
     throw codedError(`没有权限读取皮肤包里的文件：${label}`, 'ZIP_ACCESS');
   }
   if (stat.isSymbolicLink()) throw codedError(`${label}不能是符号链接或目录联接。`, 'ZIP_SYMLINK');
-  if (!stat.isFile()) throw codedError(`${label}需要是普通文件。`, 'ZIP_FORMAT');
+  if (!stat.isFile()) throw codedError(`${label}需要是普通文件。`, 'PACK_INVALID');
   if (stat.size > maxBytes) throw codedError(`${label}不能超过 ${Math.round(maxBytes / 1024 / 1024)} MB。`, 'ZIP_LIMIT');
   // Read through the resolved real path, not the manifest-provided path.
   const realTarget = packFileRealPath(base, resolved, label);
@@ -405,7 +408,7 @@ function assertNoSymlinks(root, options = {}) {
       try { stat = fs.lstatSync(current); }
       catch (error) {
         if (error.code === 'ENOENT' || error.code === 'ENOTDIR') {
-          throw codedError(`皮肤包缺少文件：${reference}`, 'ZIP_FORMAT');
+          throw codedError(`皮肤包缺少文件：${reference}`, 'PACK_INVALID');
         }
         throw codedError(`没有权限读取皮肤包里的文件：${reference}`, 'ZIP_ACCESS');
       }
@@ -413,7 +416,7 @@ function assertNoSymlinks(root, options = {}) {
         throw codedError(`皮肤包文件夹包含符号链接或目录联接：${path.relative(source, current)}，已拒绝。`, 'ZIP_SYMLINK');
       }
       if (index < parts.length - 1 && !stat.isDirectory()) {
-        throw codedError(`皮肤包缺少文件：${reference}`, 'ZIP_FORMAT');
+        throw codedError(`皮肤包缺少文件：${reference}`, 'PACK_INVALID');
       }
     }
   }
@@ -754,7 +757,7 @@ class SkinPackLibrary {
 
   filesForManifest(files) {
     const manifestFile = files.find(file => file.name === 'manifest.json');
-    if (!manifestFile) throw new Error('皮肤包缺少 manifest.json。');
+    if (!manifestFile) throw codedError('皮肤包缺少 manifest.json。', 'ZIP_MANIFEST_MISSING');
     const text = manifestFile.bytes.toString('utf8').replace(/^\uFEFF/, '');
     assertJsonDepth(text);
     let parsed;
@@ -769,7 +772,7 @@ class SkinPackLibrary {
     const kept = files.filter(file => allowed.has(file.name));
     if (kept.length !== allowed.size) {
       const missing = [...allowed].filter(name => !kept.some(file => file.name === name));
-      throw new Error(`皮肤包缺少文件：${missing[0]}`);
+      throw codedError(`皮肤包缺少文件：${missing[0]}`, 'PACK_INVALID');
     }
     return { manifest, files: kept };
   }
