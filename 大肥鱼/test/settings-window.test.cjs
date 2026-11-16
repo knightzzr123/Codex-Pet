@@ -610,6 +610,24 @@ test('预览返回错误码时焦点回到拖拽区，损坏格式只显示统�
   assert.equal(f.doc.activeElement, f.get('settings-zip-drop'));
 });
 
+test('非普通 ZIP 显示「只能导入普通 ZIP 文件。」，不显示成压缩包损坏', async () => {
+  const damaged = '压缩包已损坏或格式不受支持，请重新打包后再试。';
+  const f = fixture();
+  f.api.previewSkinPack = async () => ({ ok: false, code: 'ZIP_UNSUPPORTED', error: '只能导入普通 ZIP 文件。' });
+  await f.window.__settingsTest.previewToken('f'.repeat(32));
+  assert.equal(f.get('settings-zip-drop').dataset.state, 'error');
+  assert.equal(f.get('settings-drop-detail').textContent, '只能导入普通 ZIP 文件。');
+  assert.notEqual(f.get('settings-drop-detail').textContent, damaged);
+
+  // The renderer keeps its own copy for the code, so a result without a
+  // message field still reads as the specific sentence.
+  const fallback = fixture();
+  fallback.api.previewSkinPack = async () => ({ ok: false, code: 'ZIP_UNSUPPORTED' });
+  await fallback.window.__settingsTest.previewToken('9'.repeat(32));
+  assert.equal(fallback.get('settings-drop-detail').textContent, '只能导入普通 ZIP 文件。');
+  assert.notEqual(fallback.get('settings-drop-detail').textContent, damaged);
+});
+
 test('皮肤包校验失败显示具体原因，不显示「压缩包已损坏」', async () => {
   const reasons = [
     '皮肤包缺少文件：whale.png',

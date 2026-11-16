@@ -334,7 +334,8 @@ test('从文件读取时拒绝符号链接和非 ZIP', async t => {
   assert.equal(read[0].bytes.toString(), 'hi');
   const link = path.join(root, 'link.zip');
   fs.symlinkSync(file, link);
-  await assert.rejects(() => readZipFile(link), (error) => error instanceof ZipError && /普通 ZIP/.test(error.message));
+  await assert.rejects(() => readZipFile(link), (error) => error instanceof ZipError &&
+    error.code === 'ZIP_UNSUPPORTED' && /普通 ZIP/.test(error.message));
   fs.writeFileSync(path.join(root, 'nope.zip'), 'hello');
   await assert.rejects(() => readZipFile(path.join(root, 'nope.zip')), /不是有效的 ZIP/);
 });

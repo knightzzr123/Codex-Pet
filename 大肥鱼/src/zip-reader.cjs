@@ -417,7 +417,10 @@ async function readZipBuffer(buffer, options = {}) {
 
 function readZipBufferSyncSize(filePath, limits) {
   const stat = fs.lstatSync(filePath);
-  if (stat.isSymbolicLink() || !stat.isFile()) throw new ZipError('只能导入普通 ZIP 文件。', 'ZIP_FORMAT');
+  // A folder, device or link is not an unsupported container format: it is not
+  // a ZIP file at all. This code is not opaque, so the specific sentence is
+  // shown instead of the damaged-archive text. The rejection itself is unchanged.
+  if (stat.isSymbolicLink() || !stat.isFile()) throw new ZipError('只能导入普通 ZIP 文件。', 'ZIP_UNSUPPORTED');
   if (stat.size > limits.maxArchiveBytes) throw new ZipError('压缩包超过大小上限。', 'ZIP_LIMIT');
   return fs.readFileSync(filePath);
 }

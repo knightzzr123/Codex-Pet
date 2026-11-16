@@ -7,6 +7,7 @@ const {
   MANIFEST_VERSION, THUMBNAIL_SPEC, SKIN_PACK_LIMITS, assertManifestVersion, assertSlug, optionalText,
   referencedPathLimitMessage
 } = require('./manifests.cjs');
+const { userError } = require('./errors.cjs');
 
 const FORMATS = Object.freeze({ png: 'image/png', jpg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp' });
 const STORED_FILE = /^[a-z0-9][a-z0-9._-]{0,120}$/i;
@@ -15,9 +16,7 @@ const CHARACTER_LINK = /^pack:([a-f0-9]{64}):([a-zA-Z0-9][a-zA-Z0-9_-]{0,39})$/;
 const PACKS_INDEX_VERSION = 1;
 
 function codedError(message, code) {
-  const error = new Error(message);
-  error.code = code;
-  return error;
+  return userError(message, code);
 }
 
 function isPackId(value) {
@@ -25,7 +24,7 @@ function isPackId(value) {
 }
 
 function packCharacterId(packId, characterId) {
-  if (!isPackId(packId)) throw new Error('皮肤包 ID 无效。');
+  if (!isPackId(packId)) throw userError('皮肤包 ID 无效。');
   assertSlug(characterId, '角色 ID');
   return `pack:${packId}:${characterId}`;
 }
@@ -41,12 +40,12 @@ function firstCharacterLink(pack) {
 }
 
 function safeRelativePath(value, label) {
-  if (typeof value !== 'string' || !value.trim()) throw new Error(`${label}不能为空。`);
-  if (value.includes('\u0000')) throw new Error(`${label}包含无法识别的字符。`);
+  if (typeof value !== 'string' || !value.trim()) throw userError(`${label}不能为空。`);
+  if (value.includes('\u0000')) throw userError(`${label}包含无法识别的字符。`);
   const normalized = value.replace(/\\/g, '/');
-  if (normalized.startsWith('/') || /^[a-zA-Z]:/.test(normalized)) throw new Error(`${label}必须是皮肤包内的相对路径。`);
+  if (normalized.startsWith('/') || /^[a-zA-Z]:/.test(normalized)) throw userError(`${label}必须是皮肤包内的相对路径。`);
   const parts = normalized.split('/');
-  if (parts.some(part => !part || part === '.' || part === '..')) throw new Error(`${label}不能跳出皮肤包目录。`);
+  if (parts.some(part => !part || part === '.' || part === '..')) throw userError(`${label}不能跳出皮肤包目录。`);
   return normalized;
 }
 
@@ -85,42 +84,42 @@ function imageDimensions(bytes) {
 
 function validateThumbnail(bytes) {
   const format = imageFormat(bytes);
-  if (!format || !THUMBNAIL_SPEC.formats.includes(format)) throw new Error('缩略图请使用 PNG、JPG 或 WebP。');
-  if (bytes.length > THUMBNAIL_SPEC.maxBytes) throw new Error('缩略图不能超过 512 KB。');
+  if (!format || !THUMBNAIL_SPEC.formats.includes(format)) throw userError('缩略图请使用 PNG、JPG 或 WebP。');
+  if (bytes.length > THUMBNAIL_SPEC.maxBytes) throw userError('缩略图不能超过 512 KB。');
   const size = imageDimensions(bytes);
-  if (!size || !size.width || !size.height) throw new Error('缩略图无法解析，请换一张。');
-  if (THUMBNAIL_SPEC.square && size.width !== size.height) throw new Error('缩略图必须是正方形。');
+  if (!size || !size.width || !size.height) throw userError('缩略图无法解析，请换一张。');
+  if (THUMBNAIL_SPEC.square && size.width !== size.height) throw userError('缩略图必须是正方形。');
   if (size.width < THUMBNAIL_SPEC.minSide || size.width > THUMBNAIL_SPEC.maxSide) {
-    throw new Error(`缩略图边长需在 ${THUMBNAIL_SPEC.minSide}–${THUMBNAIL_SPEC.maxSide} 像素之间。`);
+    throw userError(`缩略图边长需在 ${THUMBNAIL_SPEC.minSide}–${THUMBNAIL_SPEC.maxSide} 像素之间。`);
   }
   return { format, width: size.width, height: size.height };
 }
 
 function normalizeManifest(value) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('manifest.json 需要是对象。');
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw userError('manifest.json 需要是对象。');
   assertManifestVersion(value.manifestVersion, '皮肤包清单');
   const name = optionalText(value.name, '皮肤包名称', 80);
-  if (!name) throw new Error('皮肤包名称不能为空。');
+  if (!name) throw userError('皮肤包名称不能为空。');
   const id = value.id === undefined ? '' : assertSlug(value.id, '皮肤包 ID');
   const version = optionalText(value.version, '皮肤包版本', 32) || '1.0.0';
   let store;
   // Reserved for a future store only; this build never downloads or validates
   // listings, and does not act on anything but the schema version.
   if (value.store !== undefined) {
-    if (!value.store || typeof value.store !== 'object' || Array.isArray(value.store)) throw new Error('store 字段需要是对象。');
-    if (!Number.isInteger(value.store.version) || value.store.version !== 1) throw new Error('store.version 当前仅支持 1。');
+    if (!value.store || typeof value.store !== 'object' || Array.isArray(value.store)) throw userError('store 字段需要是对象。');
+    if (!Number.isInteger(value.store.version) || value.store.version !== 1) throw userError('store.version 当前仅支持 1。');
     store = { version: 1 };
   }
-  if (!Array.isArray(value.characters) || !value.characters.length) throw new Error('皮肤包至少需要 1 个角色。');
-  if (value.characters.length > SKIN_PACK_LIMITS.maxCharacters) throw new Error(`皮肤包最多包含 ${SKIN_PACK_LIMITS.maxCharacters} 个角色。`);
+  if (!Array.isArray(value.characters) || !value.characters.length) throw userError('皮肤包至少需要 1 个角色。');
+  if (value.characters.length > SKIN_PACK_LIMITS.maxCharacters) throw userError(`皮肤包最多包含 ${SKIN_PACK_LIMITS.maxCharacters} 个角色。`);
   const ids = new Set();
   const characters = value.characters.map((entry, index) => {
-    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) throw new Error(`第 ${index + 1} 个角色格式无效。`);
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) throw userError(`第 ${index + 1} 个角色格式无效。`);
     const characterId = assertSlug(entry.id, `第 ${index + 1} 个角色 ID`);
-    if (ids.has(characterId)) throw new Error(`角色 ID 重复：${characterId}`);
+    if (ids.has(characterId)) throw userError(`角色 ID 重复：${characterId}`);
     ids.add(characterId);
     const characterName = optionalText(entry.name, `第 ${index + 1} 个角色名称`, 80);
-    if (!characterName) throw new Error(`第 ${index + 1} 个角色名称不能为空。`);
+    if (!characterName) throw userError(`第 ${index + 1} 个角色名称不能为空。`);
     const image = safeRelativePath(entry.image, `第 ${index + 1} 个角色图片`);
     const thumbnail = entry.thumbnail === undefined || entry.thumbnail === null || entry.thumbnail === ''
       ? null : safeRelativePath(entry.thumbnail, `第 ${index + 1} 个角色缩略图`);
@@ -132,8 +131,8 @@ function normalizeManifest(value) {
 function readJsonFile(file, maxBytes) {
   const stat = fs.lstatSync(file);
   if (stat.isSymbolicLink()) throw codedError('manifest.json 不能是符号链接或目录联接。', 'ZIP_SYMLINK');
-  if (!stat.isFile()) throw new Error('manifest.json 不是文件。');
-  if (stat.size > maxBytes) throw new Error('manifest.json 过大。');
+  if (!stat.isFile()) throw userError('manifest.json 不是文件。');
+  if (stat.size > maxBytes) throw userError('manifest.json 过大。');
   return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
 }
 
@@ -189,7 +188,7 @@ function assertJsonDepth(text, maxDepth = 32) {
     if (char === '"') inString = true;
     else if (char === '{' || char === '[') {
       depth += 1;
-      if (depth > maxDepth) throw new Error('manifest.json 嵌套过深。');
+      if (depth > maxDepth) throw userError('manifest.json 嵌套过深。');
     } else if (char === '}' || char === ']') depth = Math.max(0, depth - 1);
   }
 }
@@ -392,7 +391,7 @@ function assertNoSymlinks(root, options = {}) {
   for (const reference of references) {
     const parts = String(reference).replace(/\\/g, '/').split('/').filter(Boolean);
     if (!parts.length || parts.some(part => part === '.' || part === '..')) {
-      throw new Error('皮肤包文件路径不能跳出皮肤包目录。');
+      throw userError('皮肤包文件路径不能跳出皮肤包目录。');
     }
     let current = source;
     for (let index = 0; index < parts.length; index += 1) {
@@ -424,7 +423,7 @@ function assertNoSymlinks(root, options = {}) {
 
 function writePackFile(root, relative, bytes) {
   const target = path.resolve(root, relative);
-  if (target !== root && !target.startsWith(root + path.sep)) throw new Error('皮肤包文件不能跳出隔离目录。');
+  if (target !== root && !target.startsWith(root + path.sep)) throw userError('皮肤包文件不能跳出隔离目录。');
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.writeFileSync(target, bytes);
 }
@@ -432,7 +431,7 @@ function writePackFile(root, relative, bytes) {
 function parseManifestBytes(bytes) {
   let parsed;
   try { parsed = JSON.parse(bytes.toString('utf8').replace(/^\uFEFF/, '')); }
-  catch { throw new Error('manifest.json 无法解析或已损坏。'); }
+  catch { throw userError('manifest.json 无法解析或已损坏。'); }
   return normalizeManifest(parsed);
 }
 
@@ -543,7 +542,7 @@ class SkinPackLibrary {
       const candidate = `${base}（${index}）`;
       if (!names.has(candidate.normalize('NFC'))) return candidate;
     }
-    throw new Error('同名皮肤包过多，无法生成新的显示名称。');
+    throw userError('同名皮肤包过多，无法生成新的显示名称。');
   }
 
   // Folder imports are snapshotted before installation to close the
@@ -555,7 +554,7 @@ class SkinPackLibrary {
     const source = path.resolve(sourceDirectory);
     const target = path.resolve(targetDirectory);
     if (target === source || target.startsWith(source + path.sep)) {
-      throw new Error('皮肤包临时目录不能位于源文件夹内。');
+      throw userError('皮肤包临时目录不能位于源文件夹内。');
     }
     assertNoSymlinks(source, { references: ['manifest.json'] });
     const manifestBytes = readPackFile(source, 'manifest.json', SKIN_PACK_LIMITS.maxManifestBytes, 'manifest.json');
@@ -586,7 +585,7 @@ class SkinPackLibrary {
   async importDirectory(sourceDirectory, validateImage = async () => {}) {
     const root = path.resolve(sourceDirectory);
     const manifestFile = path.join(root, 'manifest.json');
-    if (!fs.existsSync(manifestFile)) throw new Error('皮肤包缺少 manifest.json。');
+    if (!fs.existsSync(manifestFile)) throw userError('皮肤包缺少 manifest.json。');
     assertNoSymlinks(root, { references: ['manifest.json'] });
     const manifest = normalizeManifest(readJsonFile(manifestFile, SKIN_PACK_LIMITS.maxManifestBytes));
     assertNoSymlinks(root, { references: referencedFiles(manifest) });
@@ -595,7 +594,7 @@ class SkinPackLibrary {
     for (const character of manifest.characters) {
       const imageBytes = readPackFile(root, character.image, SKIN_PACK_LIMITS.maxImageBytes, `角色“${character.name}”的图片`);
       const extension = imageFormat(imageBytes);
-      if (!extension) throw new Error(`角色“${character.name}”的图片格式不受支持。`);
+      if (!extension) throw userError(`角色“${character.name}”的图片格式不受支持。`);
       totalBytes += imageBytes.length;
       await validateImage(imageBytes, FORMATS[extension]);
       let thumbnailBytes = null;
@@ -698,7 +697,7 @@ class SkinPackLibrary {
     let totalBytes = 0;
     for (const character of manifest.characters) {
       const imageBytes = readPackFile(root, character.image, SKIN_PACK_LIMITS.maxImageBytes, `角色“${character.name}”的图片`);
-      if (!imageFormat(imageBytes)) throw new Error(`角色“${character.name}”的图片格式不受支持。`);
+      if (!imageFormat(imageBytes)) throw userError(`角色“${character.name}”的图片格式不受支持。`);
       totalBytes += imageBytes.length;
       let thumbnailBytes = null;
       if (character.thumbnail) {
@@ -762,7 +761,7 @@ class SkinPackLibrary {
     assertJsonDepth(text);
     let parsed;
     try { parsed = JSON.parse(text); }
-    catch { throw new Error('manifest.json 无法解析或已损坏。'); }
+    catch { throw userError('manifest.json 无法解析或已损坏。'); }
     const manifest = normalizeManifest(parsed);
     const allowed = new Set(['manifest.json']);
     for (const character of manifest.characters) {

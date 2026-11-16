@@ -880,3 +880,128 @@ test('文件夹总量超过 200 MB 时预览报 ZIP_LIMIT', async t => {
   assert.match(preview.error, /请减小图片后再试/);
   assert.equal(library.list().length, 0);
 });
+
+test('中文路径且 ZIP 没有读权限时只显示中文，英文报错和路径不外泄', {
+  // chmod is not meaningful for root and not honoured the same way on Windows.
+  skip: process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0)
+}, async t => {
+  const root = temporary(t);
+  const folder = path.join(root, '张三-皮肤包');
+  fs.mkdirSync(folder);
+  const file = path.join(folder, '皮肤包.zip');
+  fs.copyFileSync(writeZip(root, 60), file);
+  fs.chmodSync(file, 0o000);
+  const diagnostics = [];
+  const { session } = sessionFor(root, { onDiagnostic: entry => diagnostics.push(entry) });
+  try {
+    const registered = session.register(file, 1);
+    assert.equal(registered.ok, true, registered.error);
+    const preview = await session.preview(registered.token, 1);
+    assert.equal(preview.ok, false);
+    assert.equal(preview.code, 'ZIP_ACCESS');
+    assert.equal(preview.error, '没有权限读取皮肤包里的文件。');
+    assert.doesNotMatch(preview.error, /EACCES|EISDIR|permission|denied|open/i);
+    for (const fragment of [root, folder, '皮肤包.zip', '张三']) {
+      assert.equal(preview.error.includes(fragment), false, `文案不应包含 ${fragment}`);
+    }
+    // The technical detail is not lost: it goes to the diagnostic log instead.
+    assert.equal(diagnostics.length, 1);
+    assert.equal(diagnostics[0].code, 'EACCES');
+    assert.equal(diagnostics[0].syscall, 'open');
+    assert.match(diagnostics[0].detail, /EACCES/);
+  } finally {
+    fs.chmodSync(file, 0o644);
+  }
+});
+
+test('注入的 fs 错误按 errno 归类并写诊断，不显示英文或路径', async t => {
+  const root = temporary(t);
+  const file = writeZip(root, 61);
+  const cases = [
+    { code: 'EACCES', errno: -13, syscall: 'open', expectCode: 'ZIP_ACCESS', expect: '没有权限读取皮肤包里的文件。' },
+    { code: 'EPERM', errno: -1, syscall: 'open', expectCode: 'ZIP_ACCESS', expect: '没有权限读取皮肤包里的文件。' },
+    { code: 'EBUSY', errno: -16, syscall: 'open', expectCode: 'ZIP_ACCESS', expect: '没有权限读取皮肤包里的文件。' },
+    { code: 'ENOSPC', errno: -28, syscall: 'write', expectCode: 'ZIP_ACCESS', expect: '无法读取或保存皮肤包，请确认文件可读、数据目录可写。' }
+  ];
+  for (const item of cases) {
+    const diagnostics = [];
+    const library = {
+      directory: path.join(root, 'data'),
+      inspectZipFile: async () => {
+        throw Object.assign(new Error(`${item.code}: operation failed, open '/tmp/张三/皮肤包.zip'`), {
+          code: item.code, errno: item.errno, syscall: item.syscall, path: '/tmp/张三/皮肤包.zip'
+        });
+      }
+    };
+    const session = createSkinPackSession({ library, onDiagnostic: entry => diagnostics.push(entry) });
+    const registered = session.register(file, 1);
+    assert.equal(registered.ok, true, registered.error);
+    const preview = await session.preview(registered.token, 1);
+    assert.equal(preview.ok, false, item.code);
+    assert.equal(preview.code, item.expectCode, item.code);
+    assert.equal(preview.error, item.expect, item.code);
+    assert.doesNotMatch(preview.error, new RegExp(item.code));
+    assert.equal(preview.error.includes('张三'), false, item.code);
+    assert.equal(diagnostics.length, 1, item.code);
+    assert.equal(diagnostics[0].code, item.code);
+    assert.equal(diagnostics[0].syscall, item.syscall);
+    assert.match(diagnostics[0].detail, new RegExp(item.code));
+  }
+});
+
+test('登记后 ZIP 被删除时提示文件不存在，而不是权限问题', async t => {
+  const root = temporary(t);
+  const file = writeZip(root, 62);
+  const { session } = sessionFor(root);
+  const registered = session.register(file, 1);
+  assert.equal(registered.ok, true, registered.error);
+  fs.rmSync(file);
+  const preview = await session.preview(registered.token, 1);
+  assert.equal(preview.ok, false);
+  assert.equal(preview.code, 'PACK_INVALID');
+  assert.equal(preview.error, '文件不存在，请重新选择皮肤包文件。');
+  assert.doesNotMatch(preview.error, /ENOENT|no such file/i);
+  assert.equal(preview.error.includes(root), false);
+});
+
+test('登记后 ZIP 被换成文件夹时显示「只能导入普通 ZIP 文件。」', async t => {
+  const root = temporary(t);
+  const file = writeZip(root, 63);
+  const { session } = sessionFor(root);
+  const registered = session.register(file, 1);
+  assert.equal(registered.ok, true, registered.error);
+  fs.rmSync(file);
+  fs.mkdirSync(file);
+  const preview = await session.preview(registered.token, 1);
+  assert.equal(preview.ok, false);
+  assert.equal(preview.code, 'ZIP_UNSUPPORTED');
+  assert.equal(preview.error, '只能导入普通 ZIP 文件。');
+  assert.notEqual(preview.error, DAMAGED_ARCHIVE);
+});
+
+test('未标记的回调抛 EACCES 时仍按 errno 给 ZIP_ACCESS 并写诊断，不显示英文或路径', async t => {
+  const root = temporary(t);
+  const diagnostics = [];
+  const { session } = sessionFor(root, {
+    onDiagnostic: entry => diagnostics.push(entry),
+    validateImage: async () => {
+      throw Object.assign(new Error("EACCES: permission denied, open '/tmp/张三/角色.png'"), {
+        code: 'EACCES', errno: -13, syscall: 'open', path: '/tmp/张三/角色.png'
+      });
+    }
+  });
+  const file = writeZip(root, 65);
+  const registered = session.register(file, 1);
+  assert.equal(registered.ok, true, registered.error);
+  const preview = await session.preview(registered.token, 1);
+  assert.equal(preview.ok, true, preview.error);
+  const committed = await session.commit(registered.token, 1);
+  assert.equal(committed.ok, false);
+  assert.equal(committed.code, 'ZIP_ACCESS');
+  assert.equal(committed.error, '没有权限读取皮肤包里的文件。');
+  assert.doesNotMatch(committed.error, /EACCES|permission|denied/i);
+  assert.equal(committed.error.includes('张三'), false);
+  assert.equal(diagnostics.length, 1);
+  assert.equal(diagnostics[0].code, 'EACCES');
+  assert.match(diagnostics[0].detail, /EACCES/);
+});

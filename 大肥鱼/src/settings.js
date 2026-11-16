@@ -391,7 +391,8 @@ const IMPORT_FALLBACKS = Object.freeze({
   PACK_INVALID: '这个皮肤包不符合导入要求，请检查后重试。',
   ZIP_MANIFEST_MISSING: '没有找到 manifest.json，请确认皮肤包里有一份 manifest.json。',
   ZIP_MANIFEST_MULTIPLE: '皮肤包里有多个 manifest.json，请只保留一份。',
-  ZIP_ACCESS: '没有权限读取皮肤包里的文件。'
+  ZIP_ACCESS: '没有权限读取皮肤包里的文件。',
+  ZIP_UNSUPPORTED: '只能导入普通 ZIP 文件。'
 });
 
 // The main process already maps these codes, but the renderer keeps the last

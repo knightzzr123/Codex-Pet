@@ -1,9 +1,10 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { randomBytes, randomUUID } = require('node:crypto');
-const { ZIP_LIMITS, writeEntries } = require('./zip-reader.cjs');
+const { ZIP_LIMITS, writeEntries, ZipError } = require('./zip-reader.cjs');
 const { findManifestDirectory, firstCharacterLink } = require('./skin-packs.cjs');
 const { referencedPathLimitMessage } = require('./manifests.cjs');
+const { isUserFacingError } = require('./errors.cjs');
 
 const TOKEN_TTL_MS = 10 * 60 * 1000;
 const MAX_TOKENS = 4;
@@ -30,7 +31,11 @@ const MESSAGES = Object.freeze({
   ZIP_MANIFEST_MULTIPLE: '皮肤包里有多个 manifest.json，请只保留一份。',
   ZIP_HEADER: DAMAGED_ARCHIVE,
   ZIP_CRC: DAMAGED_ARCHIVE,
-  ZIP_FORMAT: DAMAGED_ARCHIVE
+  ZIP_FORMAT: DAMAGED_ARCHIVE,
+  // The selected thing is not a regular ZIP (a folder, device or link). That
+  // is a different problem from a damaged archive, so this code is not opaque
+  // and its own sentence reaches the settings window.
+  ZIP_UNSUPPORTED: '只能导入普通 ZIP 文件。'
 });
 
 // Only the zip-reader's structural errors are opaque: their parser detail is
@@ -38,7 +43,46 @@ const MESSAGES = Object.freeze({
 // Every other code keeps its specific Chinese reason (PACK_INVALID included).
 const OPAQUE_CODES = new Set(['ZIP_HEADER', 'ZIP_CRC', 'ZIP_FORMAT']);
 
-const CHINESE = /[\u4e00-\u9fff]/;
+// Node fs failures: the message is English and embeds the absolute path, so it
+// must never reach the settings window. `errno`/`syscall` are the markers Node
+// sets on every fs error; the code set also catches errors that were re-wrapped
+// without them. EACCES/EPERM/EBUSY mean "cannot read or write it now" (a lock
+// held by a browser or antivirus on Windows behaves the same way).
+const ACCESS_ERROR_CODES = new Set(['EACCES', 'EPERM', 'EBUSY']);
+const MISSING_ERROR_CODES = new Set(['ENOENT', 'ENOTDIR']);
+const SYSTEM_ERROR_CODES = new Set([
+  ...ACCESS_ERROR_CODES,
+  ...MISSING_ERROR_CODES,
+  'EIO', 'ENOSPC', 'EROFS', 'EMFILE', 'ENFILE', 'ENAMETOOLONG',
+  'EEXIST', 'EISDIR', 'ELOOP', 'ENOTEMPTY', 'EXDEV', 'EINVAL', 'UNKNOWN'
+]);
+const GENERIC_IO_ERROR = '无法读取或保存皮肤包，请确认文件可读、数据目录可写。';
+
+// Zip failures and `UserFacingError`s are thrown by this project with Chinese
+// copy meant for the user. A Node fs error is not: it is logged and replaced.
+function carriesUserMessage(error) {
+  return isUserFacingError(error) || error instanceof ZipError;
+}
+
+function isSystemError(error) {
+  if (!error || typeof error !== 'object') return false;
+  // Our own errors win: they were written for the user even when a message
+  // happens to mention a path or an errno-like word.
+  if (carriesUserMessage(error)) return false;
+  if (typeof error.syscall === 'string' || error.errno !== undefined) return true;
+  return typeof error.code === 'string' && SYSTEM_ERROR_CODES.has(error.code);
+}
+
+function systemFailure(error, context = {}) {
+  const code = typeof error?.code === 'string' ? error.code : '';
+  if (ACCESS_ERROR_CODES.has(code)) return { code: 'ZIP_ACCESS', message: MESSAGES.ZIP_ACCESS };
+  if (MISSING_ERROR_CODES.has(code)) {
+    return context.kind === 'zip'
+      ? { code: 'PACK_INVALID', message: '文件不存在，请重新选择皮肤包文件。' }
+      : { code: 'PACK_INVALID', message: '文件夹不存在，请重新选择皮肤包文件夹。' };
+  }
+  return { code: 'ZIP_ACCESS', message: GENERIC_IO_ERROR };
+}
 
 function limitMessage(detail) {
   const base = detail || MESSAGES.ZIP_LIMIT;
@@ -46,14 +90,13 @@ function limitMessage(detail) {
   return `${base.replace(/[。.]?$/, '。')}请减小图片后再试。`;
 }
 
-function fail(code, error) {
+function fail(code, detail) {
   if (OPAQUE_CODES.has(code)) return { ok: false, code, error: MESSAGES[code] };
-  if (code === 'ZIP_LIMIT') return { ok: false, code, error: limitMessage(error) };
-  // A concrete Chinese reason is always more useful than a generic sentence.
-  // A non-Chinese message here is an OS/internal detail, so it is replaced by
-  // the code's own copy instead of leaking e.g. "EACCES: permission denied".
-  const detail = typeof error === 'string' && CHINESE.test(error) ? error : '';
-  return { ok: false, code, error: detail || MESSAGES[code] || MESSAGES.PACK_INVALID };
+  const message = typeof detail === 'string' ? detail : '';
+  if (code === 'ZIP_LIMIT') return { ok: false, code, error: limitMessage(message) };
+  // Every call site passes either its own literal copy or a message from one of
+  // our user-facing errors; an empty detail falls back to the code's copy.
+  return { ok: false, code, error: message || MESSAGES[code] || MESSAGES.PACK_INVALID };
 }
 
 function isRejectedPath(value) {
@@ -126,9 +169,11 @@ function createSkinPackSession(options = {}) {
   const tokens = new Map();
   let order = 0;
 
-  // Anything that is not a zip-reader structural code and not PACK_CHANGED is
-  // a skin-packs validation failure; it must never be flattened into the
-  // damaged-archive code.
+  function diagnostic(entry) {
+    try { onDiagnostic(entry); }
+    catch { /* diagnostics must never block the result */ }
+  }
+
   function errorCode(error, fallback = 'PACK_INVALID') {
     const code = typeof error?.code === 'string' ? error.code : fallback;
     return code.startsWith('ZIP_') || code === 'PACK_CHANGED' || code === 'PACK_INVALID'
@@ -136,13 +181,30 @@ function createSkinPackSession(options = {}) {
       : fallback;
   }
 
-  function report(error, fallback = 'PACK_INVALID') {
-    const code = errorCode(error, fallback);
-    if (OPAQUE_CODES.has(code)) {
-      try { onDiagnostic({ event: 'skin-pack-error', code, detail: error?.message || '' }); }
-      catch { /* diagnostics must never block the result */ }
+  // Split a thrown value into the code the UI reads and the copy it shows. The
+  // technical detail of a system failure (English message, absolute path) only
+  // ever goes to the diagnostic log.
+  function describe(error, context = {}) {
+    if (isSystemError(error)) {
+      diagnostic({
+        event: 'skin-pack-error',
+        code: typeof error.code === 'string' ? error.code : 'UNKNOWN',
+        syscall: typeof error.syscall === 'string' ? error.syscall : '',
+        detail: typeof error.message === 'string' ? error.message : ''
+      });
+      return systemFailure(error, context);
     }
-    return code;
+    const code = errorCode(error);
+    if (OPAQUE_CODES.has(code)) {
+      diagnostic({ event: 'skin-pack-error', code, detail: typeof error?.message === 'string' ? error.message : '' });
+    }
+    const message = carriesUserMessage(error) && typeof error.message === 'string' ? error.message : '';
+    return { code, message };
+  }
+
+  function failure(error, context = {}) {
+    const described = describe(error, context);
+    return fail(described.code, described.message);
   }
 
   function drop(token) {
@@ -247,7 +309,7 @@ function createSkinPackSession(options = {}) {
       return { ok: true, ...record.preview };
     } catch (error) {
       drop(record.token);
-      return fail(report(error), error.message);
+      return failure(error, { kind: record.kind });
     }
   }
 
@@ -260,7 +322,11 @@ function createSkinPackSession(options = {}) {
     try { again = library.identifyDirectory(record.dir); }
     catch (error) {
       drop(token);
-      if (typeof error.code === 'string' && error.code.startsWith('ZIP_')) return fail(report(error), error.message);
+      // A zip-reader or fs failure is the real reason the re-check failed; any
+      // other validation error means the pack changed since the preview.
+      if ((typeof error?.code === 'string' && error.code.startsWith('ZIP_')) || isSystemError(error)) {
+        return failure(error, { kind: record.kind });
+      }
       return fail('PACK_CHANGED');
     }
     if (again.id !== record.id) {
@@ -320,7 +386,7 @@ function createSkinPackSession(options = {}) {
     } catch (error) {
       if (record.kind === 'directory' && record.ownsDir) drop(token);
       else record.committing = false;
-      return fail(report(error), error.message);
+      return failure(error, { kind: record.kind });
     }
   }
 
