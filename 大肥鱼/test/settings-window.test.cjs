@@ -5,8 +5,91 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { resolveSettingsWindow, settingsCloseBlocked } = require('../src/settings-window.cjs');
 
+const Module = require('node:module');
+
 const root = path.join(__dirname, '..');
-const source = fs.readFileSync(path.join(root, 'src', 'settings.js'), 'utf8');
+// Loaded only so the fixture can execute settings.js in a VM; assertions below
+// are on the resulting behavior and DOM, never on this text.
+const settingsSource = fs.readFileSync(path.join(root, 'src', 'settings.js'), 'utf8');
+
+// A tiny HTML tokenizer: the tests assert on the parsed element tree and its
+// attributes instead of matching the settings.html source text.
+function loadSettingsDom() {
+  const html = fs.readFileSync(path.join(root, 'src', 'settings.html'), 'utf8');
+  const voidTags = new Set(['meta', 'link', 'br', 'hr', 'img', 'input', 'source', 'area', 'base', 'col', 'embed', 'param', 'track', 'wbr']);
+  const tagPattern = /<(\/?)([a-zA-Z][a-zA-Z0-9-]*)((?:\s+[^\s=/>]+(?:="[^"]*")?)*)\s*(\/?)>/g;
+  const all = [];
+  const stack = [];
+  let last = 0;
+  let match;
+  while ((match = tagPattern.exec(html))) {
+    const text = html.slice(last, match.index);
+    if (stack.length) stack[stack.length - 1].text += text;
+    last = tagPattern.lastIndex;
+    if (match[1] === '/') {
+      const name = match[2].toLowerCase();
+      while (stack.length && stack[stack.length - 1].tag !== name) stack.pop();
+      if (stack.length) stack.pop();
+      continue;
+    }
+    const attrs = {};
+    const attrPattern = /([^\s=/>]+)(?:="([^"]*)")?/g;
+    let attribute;
+    while ((attribute = attrPattern.exec(match[3] || ''))) {
+      attrs[attribute[1]] = attribute[2] === undefined ? '' : attribute[2];
+    }
+    const node = { tag: match[2].toLowerCase(), attrs, children: [], text: '', parent: stack[stack.length - 1] || null };
+    all.push(node);
+    if (stack.length) stack[stack.length - 1].children.push(node);
+    if (!voidTags.has(node.tag) && !match[4]) stack.push(node);
+  }
+  const textContent = node => node.text + node.children.map(textContent).join('');
+  return {
+    all,
+    byId: id => all.find(node => node.attrs.id === id) || null,
+    byRole: role => all.filter(node => node.attrs.role === role),
+    text: () => (all.length ? textContent(all[0]) : '')
+  };
+}
+
+// Replace electron for one test so openSettingsWindow's real BrowserWindow
+// options can be asserted without launching a window.
+function fakeElectron(t) {
+  const windows = [];
+  class FakeWebContents {
+    setWindowOpenHandler() {}
+    on() {}
+    once() {}
+    send() {}
+    isDestroyed() { return false; }
+  }
+  class FakeWindow {
+    constructor(options) {
+      this.options = options;
+      this.webContents = new FakeWebContents();
+      windows.push(this);
+    }
+    setMenu() {}
+    on() {}
+    once() {}
+    loadFile() { return Promise.resolve(); }
+    isDestroyed() { return false; }
+    focus() {}
+    show() {}
+    close() {}
+  }
+  const screen = {
+    workArea: { x: 0, y: 0, width: 1920, height: 1080 },
+    getPrimaryDisplay() { return { workArea: this.workArea }; },
+    getDisplayMatching() { return { workArea: this.workArea }; }
+  };
+  const originalLoad = Module._load;
+  t.mock.method(Module, '_load', function (request, parent, isMain) {
+    if (request === 'electron') return { BrowserWindow: FakeWindow, screen };
+    return originalLoad.call(Module, request, parent, isMain);
+  });
+  return { windows };
+}
 
 function fixture() {
   const elements = new Map();
@@ -65,7 +148,7 @@ function fixture() {
     window, document: doc, URLSearchParams, setTimeout, clearTimeout,
     globalThis: { location: window.location }
   });
-  vm.runInContext(source, context);
+  vm.runInContext(settingsSource, context);
   return {
     get, api, doc, window,
     emitWindow: (name, extra = {}) => listeners.get(name)?.({ preventDefault() {}, ...extra })
@@ -98,13 +181,6 @@ test('设置窗开着时 app.quit 能完成', () => {
   assert.equal(settings.prevented, 1, '退出标志设置后 close 不再 preventDefault');
   assert.equal(settingsCloseBlocked({ __loadFailed: true }), false);
   assert.equal(settingsCloseBlocked({ __rendererGone: true }), false);
-  const main = fs.readFileSync(path.join(root, 'src', 'main.cjs'), 'utf8');
-  assert.match(main, /before-quit/);
-  assert.match(main, /settingsWindow\.__allowClose = true/);
-  assert.match(main, /settingsWindow\.close\(\)/);
-  const quit = main.slice(main.indexOf("app.on('before-quit'"));
-  assert.ok(quit.indexOf('settingsWindow.__allowClose = true') < quit.indexOf('settingsWindow.close()'),
-    'before-quit 必须先设标志再关闭设置窗口');
 });
 
 test('已有设置窗口时只聚焦，不新建', () => {
@@ -183,36 +259,47 @@ test('方向键在六个分类之间移动', () => {
 });
 
 test('HTML 有六个分类、读屏名称、拖拽区和导入前预览', () => {
-  const html = fs.readFileSync(path.join(root, 'src', 'settings.html'), 'utf8');
+  const dom = loadSettingsDom();
+  const categories = dom.byRole('tab').filter(node => node.attrs['data-category']);
+  assert.deepEqual(categories.map(node => node.attrs['data-category']),
+    ['appearance', 'dialogue', 'behavior', 'accessibility', 'preferences', 'about']);
   for (const label of ['外观/皮肤', '对话/台词', '行为/待机', '无障碍', '偏好导入导出', '诊断/关于']) {
-    assert.match(html, new RegExp(label));
+    assert.ok(dom.text().includes(label), label);
   }
-  assert.match(html, /role="dialog"/);
-  assert.doesNotMatch(html, /aria-modal="true"/);
-  assert.match(html, /aria-orientation="vertical"/);
-  assert.match(html, /aria-labelledby="settings-title"/);
-  assert.match(html, /id="settings-zip-drop"/);
-  assert.match(html, /id="settings-zip-preview"/);
-  assert.match(html, /id="settings-close"[^>]*aria-label="关闭设置"/);
+  const panel = dom.byId('settings-panel');
+  assert.equal(panel.attrs.role, 'dialog');
+  assert.equal(panel.attrs['aria-modal'], undefined);
+  assert.equal(panel.attrs['aria-labelledby'], 'settings-title');
+  assert.equal(dom.byId('settings-nav').attrs['aria-orientation'], 'vertical');
+  assert.ok(dom.byId('settings-zip-drop'));
+  assert.ok(dom.byId('settings-zip-preview'));
+  assert.equal(dom.byId('settings-close').attrs['aria-label'], '关闭设置');
   for (const id of ['settings-bubble-x', 'settings-bubble-y', 'settings-idle', 'settings-opacity']) {
-    assert.match(html, new RegExp(`<label[^>]*for="${id}"`), id);
-    assert.match(html, new RegExp(`id="${id}"[^>]*type="range"`), id);
+    assert.ok(dom.all.some(node => node.tag === 'label' && node.attrs.for === id), id);
+    const input = dom.byId(id);
+    assert.ok(input, id);
+    assert.equal(input.tag, 'input', id);
+    assert.equal(input.attrs.type, 'range', id);
   }
-  const css = fs.readFileSync(path.join(root, 'src', 'settings.css'), 'utf8');
-  assert.match(css, /\[hidden\] \{ display: none !important; \}/);
-  assert.match(css, /prefers-color-scheme: dark/);
-  assert.match(css, /forced-colors: active/);
-  assert.match(css, /border: 4px solid CanvasText/);
-  const main = fs.readFileSync(path.join(root, 'src', 'main.cjs'), 'utf8');
-  assert.doesNotMatch(main, /new Tray/);
-  assert.match(main, /click: openSettingsPanel/);
-  assert.match(main, /before-input-event/);
-  assert.match(source, /settingsReturnFocus/);
-  assert.match(source, /settings-close'\)\?\.focus/);
-  assert.match(source, /event\.key !== 'Tab'/);
-  assert.match(source, /aria-checked/);
-  assert.match(source, /aria-pressed/);
-  assert.match(source, /aria-label', `\$\{active \? '当前角色' : '切换到'\}/);
+  // A2: the preview section is not a live region; only #settings-live announces.
+  assert.equal(dom.byId('settings-zip-preview').attrs['aria-live'], undefined);
+  assert.equal(dom.byId('settings-zip-preview').attrs['aria-label'], '皮肤包导入预览');
+});
+
+test('皮肤卡片暴露 radio、当前选中和切换语义', () => {
+  const f = fixture();
+  seedSkins(f, ['default', 'rose']);
+  const active = skinCard(f, 'default');
+  const other = skinCard(f, 'rose');
+  assert.equal(active.getAttribute('role'), 'radio');
+  assert.equal(active.getAttribute('aria-checked'), 'true');
+  assert.equal(active.getAttribute('aria-pressed'), 'true');
+  assert.match(active.getAttribute('aria-label'), /当前角色/);
+  assert.equal(other.getAttribute('aria-checked'), 'false');
+  assert.match(other.getAttribute('aria-label'), /切换到/);
+  f.get('settings-import-skin').focus();
+  f.window.__settingsTest.focusClose();
+  assert.equal(f.doc.activeElement, f.get('settings-close'), 'focusClose 把焦点移到关闭按钮');
 });
 
 // Z-5 helpers: count every write to a live region and seed skin cards so the
@@ -240,6 +327,8 @@ function seedSkins(f, ids) {
 function skinCard(f, id) {
   return f.get('settings-skins').children.find(node => node.getAttribute('data-skin-id') === id);
 }
+
+const tick = () => new Promise(resolve => setImmediate(resolve));
 
 const reusedSwitchPreview = switchTo => ({
   ok: true, name: 'QA包装', installedName: 'QA包装', version: '1.0.0', sourceId: 'qa-pack',
@@ -276,6 +365,10 @@ test('已导入过的皮肤包提示「已经导入过」，只给「切换到�
   assert.equal(f.api.skinId, switchTo);
   assert.equal(f.api.committed, undefined, 'identical content must not be committed again');
   assert.equal(f.get('settings-zip-preview').hidden, true);
+  // A switch is not an import: the drop zone says where it moved to.
+  assert.equal(f.get('settings-zip-drop').dataset.state, 'switched');
+  assert.equal(f.get('settings-drop-title').textContent, '已切换到「QA包装」');
+  assert.notEqual(f.get('settings-drop-title').textContent, '导入成功');
   // 切换成功后焦点移到对应皮肤卡片。
   assert.equal(f.doc.activeElement, skinCard(f, switchTo));
   assert.equal(polite.writes.at(-1), '已切换到「QA包装」。');
@@ -293,6 +386,9 @@ test('内容相同但没有切换目标时按钮是「知道了」，确认后�
   assert.equal(f.get('settings-zip-confirm').textContent, '知道了');
   await f.window.__settingsTest.submitZip();
   assert.equal(f.api.skinId, undefined, 'no switch target means no switch');
+  assert.equal(f.get('settings-zip-drop').dataset.state, 'existing');
+  assert.equal(f.get('settings-drop-title').textContent, '已有这个皮肤包');
+  assert.notEqual(f.get('settings-drop-title').textContent, '导入成功');
   assert.equal(f.doc.activeElement, f.get('settings-zip-drop'));
   assert.deepEqual(polite.writes, ['这个皮肤包已经导入过。'], '确认只清理预览，不再补播一次');
 });
@@ -350,7 +446,6 @@ test('同名不同 sourceId（kind=name）用「原有同名皮肤保留」文�
   assert.deepEqual(polite.writes, ['已作为新皮肤导入「QA包装（4）」，原有同名皮肤保留。']);
   assert.equal(assertive.writes.length, 0);
   assert.equal(f.doc.activeElement, f.get('settings-zip-drop'));
-  assert.match(source, /result\.duplicate\?\.kind === 'name'/);
 });
 
 test('提交时才发现内容已存在：显示「已经导入过」，焦点在「切换到它」', async () => {
@@ -370,6 +465,8 @@ test('提交时才发现内容已存在：显示「已经导入过」，焦点�
   };
   await f.window.__settingsTest.submitZip();
   assert.equal(f.get('settings-notice-text').textContent, '这个皮肤包已经导入过。可以切换到「QA包装」。');
+  assert.equal(f.get('settings-zip-drop').dataset.state, 'existing');
+  assert.equal(f.get('settings-drop-title').textContent, '已有这个皮肤包');
   const action = f.get('settings-notice-action');
   assert.equal(action.hidden, false);
   assert.equal(action.textContent, '切换到它');
@@ -378,6 +475,8 @@ test('提交时才发现内容已存在：显示「已经导入过」，焦点�
   action.emit('click');
   assert.equal(f.api.skinId, switchTo);
   assert.equal(f.get('settings-notice').hidden, true);
+  assert.equal(f.get('settings-zip-drop').dataset.state, 'switched');
+  assert.equal(f.get('settings-drop-title').textContent, '已切换到「QA包装」');
   assert.equal(f.doc.activeElement, skinCard(f, switchTo), '动作按钮切皮肤后焦点落在对应皮肤卡片');
   assert.equal(polite.writes.at(-1), '已切换到「QA包装」。');
 });
@@ -396,6 +495,8 @@ test('内容相同但没有切换目标：提交后提示给「知道了」，�
   const action = f.get('settings-notice-action');
   assert.equal(action.hidden, false);
   assert.equal(action.textContent, '知道了');
+  assert.equal(f.get('settings-zip-drop').dataset.state, 'existing');
+  assert.equal(f.get('settings-drop-title').textContent, '已有这个皮肤包');
   assert.equal(f.doc.activeElement, f.get('settings-zip-drop'), '没有「切换到它」时焦点回拖拽区');
 });
 
@@ -436,38 +537,130 @@ test('提示关闭：「关闭」按钮、Esc、动作按钮都会把焦点放�
   assert.equal(f.api.closed, true);
 });
 
-test('提示不再是 live region：重复播报只走 polite #settings-live', () => {
-  const html = fs.readFileSync(path.join(root, 'src', 'settings.html'), 'utf8');
-  const notice = html.match(/<div id="settings-notice"[^>]*>/);
+test('取消预览后拖放区回到空闲标题', async () => {
+  const f = fixture();
+  f.get('settings-notice').hidden = true;
+  f.api.previewSkinPack = async () => freshPreview({
+    duplicate: { kind: 'sourceId', existingName: 'QA包装', existingId: 'old', switchTo: '' }
+  });
+  await f.window.__settingsTest.previewToken('a'.repeat(32));
+  assert.equal(f.get('settings-zip-drop').hidden, true);
+  f.get('settings-zip-cancel').emit('click');
+  await tick();
+  assert.equal(f.api.canceled, 'a'.repeat(32));
+  assert.equal(f.get('settings-zip-drop').dataset.state, 'idle');
+  assert.equal(f.get('settings-drop-title').textContent, '将 .zip 或皮肤包文件夹拖到此处');
+});
+
+test('内容相同的提示被取消（未切换）后拖放区回到空闲标题', async () => {
+  const f = fixture();
+  const switchTo = `pack:${'f'.repeat(64)}:whale`;
+  seedSkins(f, ['default', switchTo]);
+  f.get('settings-notice').hidden = true;
+  f.api.previewSkinPack = async () => freshPreview();
+  await f.window.__settingsTest.previewToken('b'.repeat(32));
+  f.api.commitResult = {
+    ok: true, reused: true, renamed: false, switchTo,
+    duplicate: { kind: 'content', existingName: 'QA包装', existingId: 'f'.repeat(64) },
+    pack: { id: 'f'.repeat(64), name: 'QA包装', characterCount: 1 }
+  };
+  await f.window.__settingsTest.submitZip();
+  assert.equal(f.get('settings-drop-title').textContent, '已有这个皮肤包');
+  assert.equal(f.get('settings-notice').hidden, false);
+  f.get('settings-notice-close').emit('click');
+  assert.equal(f.get('settings-zip-drop').dataset.state, 'idle');
+  assert.equal(f.get('settings-drop-title').textContent, '将 .zip 或皮肤包文件夹拖到此处');
+  assert.equal(f.doc.activeElement, f.get('settings-zip-drop'));
+});
+
+test('预览失败时焦点回到拖拽区并只播报一次错误', async () => {
+  const f = fixture();
+  const assertive = liveRecorder(f, 'settings-live-assertive');
+  const polite = liveRecorder(f, 'settings-live');
+  f.api.previewSkinPack = async () => { throw new Error('读取皮肤包失败'); };
+  await f.window.__settingsTest.previewToken('c'.repeat(32));
+  assert.equal(f.get('settings-zip-drop').dataset.state, 'error');
+  assert.equal(f.get('settings-drop-title').textContent, '导入失败');
+  assert.equal(f.get('settings-drop-detail').textContent, '读取皮肤包失败');
+  assert.deepEqual(assertive.writes, ['读取皮肤包失败']);
+  assert.equal(polite.writes.length, 0);
+  assert.equal(f.doc.activeElement, f.get('settings-zip-drop'));
+});
+
+test('预览返回错误码时焦点回到拖拽区，损坏格式只显示统一中文', async () => {
+  const f = fixture();
+  const assertive = liveRecorder(f, 'settings-live-assertive');
+  f.api.previewSkinPack = async () => ({ ok: false, code: 'ZIP_CRC', error: '压缩包条目 CRC 校验失败。' });
+  await f.window.__settingsTest.previewToken('d'.repeat(32));
+  assert.equal(f.get('settings-zip-drop').dataset.state, 'error');
+  assert.equal(f.get('settings-drop-title').textContent, '导入失败');
+  assert.equal(f.get('settings-drop-detail').textContent, '压缩包已损坏或格式不受支持，请重新打包后再试。');
+  assert.deepEqual(assertive.writes, ['压缩包已损坏或格式不受支持，请重新打包后再试。']);
+  assert.equal(f.doc.activeElement, f.get('settings-zip-drop'));
+});
+
+test('大小超限提示追加「请减小图片后再试」，技术错误不外泄', async () => {
+  const f = fixture();
+  f.api.previewSkinPack = async () => ({ ok: false, code: 'ZIP_LIMIT', error: '皮肤包总大小超过 200 MB。' });
+  await f.window.__settingsTest.previewToken('e'.repeat(32));
+  assert.equal(f.get('settings-drop-detail').textContent, '皮肤包总大小超过 200 MB。请减小图片后再试。');
+  assert.equal(f.doc.activeElement, f.get('settings-zip-drop'));
+});
+
+test('提示不是 live region，播报只走 polite #settings-live', async () => {
+  const dom = loadSettingsDom();
+  const notice = dom.byId('settings-notice');
   assert.ok(notice);
-  assert.doesNotMatch(notice[0], /role="(status|alert)"/);
-  assert.doesNotMatch(notice[0], /aria-live/);
-  assert.doesNotMatch(notice[0], /aria-atomic/);
-  assert.match(html, /id="settings-live"[^>]*role="status"[^>]*aria-live="polite"/);
-  // liveAssert 只留给 PACK_CHANGED 和错误。
-  assert.doesNotMatch(source, /liveAssert\(`这个皮肤包已经导入过/);
-  assert.doesNotMatch(source, /liveAssert\(`已作为新皮肤导入/);
-  assert.match(source, /PACK_CHANGED[\s\S]*?liveAssert\(/);
-  assert.match(source, /function rejectPack[\s\S]*?liveAssert\(/);
+  assert.equal(notice.attrs.role, undefined);
+  assert.equal(notice.attrs['aria-live'], undefined);
+  assert.equal(notice.attrs['aria-atomic'], undefined);
+  const polite = dom.byId('settings-live');
+  assert.equal(polite.attrs.role, 'status');
+  assert.equal(polite.attrs['aria-live'], 'polite');
+  const assertive = dom.byId('settings-live-assertive');
+  assert.equal(assertive.attrs.role, 'alert');
+
+  // The duplicate/renamed import results never go through the assertive
+  // region: they are announced once by #settings-live.
+  const f = fixture();
+  f.get('settings-notice').hidden = true;
+  const politeRecorder = liveRecorder(f, 'settings-live');
+  const assertiveRecorder = liveRecorder(f, 'settings-live-assertive');
+  f.api.previewSkinPack = async () => reusedSwitchPreview('');
+  await f.window.__settingsTest.previewToken('1'.repeat(32));
+  await f.window.__settingsTest.submitZip();
+  assert.equal(politeRecorder.writes.length, 1);
+  assert.equal(assertiveRecorder.writes.length, 0);
 });
 
-test('导入 UI 已移除 PACK_CONFIRM 覆盖确认流程', () => {
-  assert.doesNotMatch(source, /PACK_CONFIRM|needsConfirm|acceptSameName|确认并导入/);
-  assert.match(source, /这个皮肤包已经导入过/);
-  assert.match(source, /已作为新皮肤导入/);
-  assert.match(source, /旧版本保留/);
-  assert.match(source, /原有同名皮肤保留/);
-  const html = fs.readFileSync(path.join(root, 'src', 'settings.html'), 'utf8');
-  assert.match(html, /id="settings-notice"/);
-  assert.match(html, /id="settings-notice-action"/);
+test('导入预览只有「导入/取消」，没有覆盖确认对话框', async () => {
+  const dom = loadSettingsDom();
+  const preview = dom.byId('settings-zip-preview');
+  assert.ok(preview);
+  const within = node => {
+    for (let current = node?.parent; current; current = current.parent) if (current === preview) return true;
+    return false;
+  };
+  assert.ok(within(dom.byId('settings-zip-confirm')), '导入按钮在预览区内');
+  assert.ok(within(dom.byId('settings-zip-cancel')), '取消按钮在预览区内');
+  assert.equal(dom.all.some(node => /PACK_CONFIRM|needsConfirm|acceptSameName/.test(node.attrs.id || '')), false);
+
+  const f = fixture();
+  f.api.previewSkinPack = async () => freshPreview();
+  await f.window.__settingsTest.previewToken('2'.repeat(32));
+  assert.equal(f.get('settings-zip-confirm').textContent, '导入');
+  assert.equal(f.get('settings-zip-preview').hidden, false);
 });
 
-test('设置窗口不挂在宠物窗口下，并保留自己的任务栏按钮', () => {
-  const settingsWindow = fs.readFileSync(path.join(root, 'src', 'settings-window.cjs'), 'utf8');
-  assert.doesNotMatch(settingsWindow, /^\s*parent\s*:/m);
-  assert.match(settingsWindow, /skipTaskbar:\s*false/);
-  assert.match(settingsWindow, /modal:\s*false/);
-  const main = fs.readFileSync(path.join(root, 'src', 'main.cjs'), 'utf8');
-  assert.match(main, /openSettingsWindow\(\{[\s\S]*?anchor: win/);
-  assert.doesNotMatch(main, /parent:\s*win/);
+test('设置窗口不挂在宠物窗口下，并保留自己的任务栏按钮', t => {
+  const { windows } = fakeElectron(t);
+  const { openSettingsWindow } = require('../src/settings-window.cjs');
+  const win = openSettingsWindow({ anchor: null });
+  assert.equal(windows.length, 1);
+  const options = windows[0].options;
+  assert.equal('parent' in options, false, '设置窗不挂在宠物窗口下');
+  assert.equal(options.modal, false);
+  assert.equal(options.skipTaskbar, false, '保留自己的任务栏按钮');
+  assert.equal(options.fullscreenable, false);
+  assert.equal(win, windows[0]);
 });

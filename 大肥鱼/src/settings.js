@@ -305,6 +305,10 @@ function hideNotice(options = {}) {
   // Closing must return focus to the drop zone; the 8 s auto-dismiss only does
   // it when focus was actually inside the toast, so it never steals focus.
   if (wasVisible && (options.focus !== false || hadFocus)) focusDrop();
+  // Dismissing a duplicate result without switching leaves no import behind, so
+  // the drop zone goes back to its idle prompt instead of a stale result title.
+  const drop = $('settings-zip-drop');
+  if (drop?.dataset?.state === 'existing') setDropState('idle');
 }
 
 // A non-blocking toast. An action keeps it open until the user dismisses it or
@@ -348,12 +352,17 @@ function setDropState(state, detail) {
     illegal: ['只能导入 .zip 或皮肤包文件夹', detail || '一次只能导入一个皮肤包'],
     busy: ['正在校验…', '请稍候，完成前不能再次投放。'],
     success: ['导入成功', detail || '皮肤包已写入。'],
+    // Identical content is never written a second time, so it must never say
+    // "导入成功"; switching reports the skin it moved to instead.
+    existing: ['已有这个皮肤包', detail || '没有重复导入。'],
+    switched: [detail || '已切换到该皮肤包', '已保存为当前皮肤。'],
     error: ['导入失败', detail || '请重试。']
   };
   const pair = labels[state] || labels.idle;
-  if (title) title.textContent = pair[0];
-  if (text) text.textContent = detail || pair[1];
-  drop.setAttribute('aria-label', pair[0]);
+  const titleText = state === 'switched' ? (detail || pair[0]) : pair[0];
+  if (title) title.textContent = titleText;
+  if (text) text.textContent = state === 'switched' ? pair[1] : (detail || pair[1]);
+  drop.setAttribute('aria-label', titleText);
   const busy = state === 'busy';
   for (const id of ['settings-import-zip', 'settings-import-pack', 'settings-import-skin']) {
     const button = $(id);
@@ -373,16 +382,34 @@ function isHiddenDeep(node) {
   return false;
 }
 
+const DAMAGED_ARCHIVE = '压缩包已损坏或格式不受支持，请重新打包后再试。';
+
+// The main process already maps these codes, but the renderer keeps the last
+// word on what the user reads: a parser detail or an English OS error must
+// never appear in the drop zone.
+function importErrorMessage(result) {
+  const code = result?.code || '';
+  const message = typeof result?.error === 'string' ? result.error : '';
+  if (code === 'ZIP_HEADER' || code === 'ZIP_CRC' || code === 'ZIP_FORMAT') return DAMAGED_ARCHIVE;
+  if (code === 'ZIP_LIMIT') {
+    if (message.includes('请减小图片')) return message;
+    return `${message ? message.replace(/[。.]?$/, '。') : '压缩包超过大小上限，'}请减小图片后再试。`;
+  }
+  return message || '无法导入这个皮肤包。';
+}
+
 function rejectPack(result) {
-  const message = result?.error || '无法导入这个皮肤包。';
+  const message = importErrorMessage(result);
   if (result?.code === 'PATH_REJECTED') {
     setDropState('illegal', '只能导入 .zip 或皮肤包文件夹');
     liveAssert(message);
+    focusDrop();
     return;
   }
   setDropState('error', message);
   liveAssert(message);
   setStatus(message);
+  focusDrop();
 }
 
 async function previewToken(token) {
@@ -412,7 +439,11 @@ async function previewToken(token) {
     } else live(`皮肤包「${preview.name || ''}」已就绪，请确认导入`);
     setStatus('');
   } catch (error) {
-    setDropState('error', error?.message || '无法预览这个皮肤包。');
+    const message = importErrorMessage({ code: error?.code, error: error?.message });
+    setDropState('error', message);
+    liveAssert(message);
+    setStatus(message);
+    focusDrop();
   }
 }
 
@@ -435,6 +466,7 @@ function switchToPack(switchTo, name) {
   const message = name ? `已切换到「${name}」。` : '已切换到这个皮肤包。';
   setStatus(message);
   live(message);
+  setDropState('switched', name ? `已切换到「${name}」` : '已切换到这个皮肤包');
   // Z-5 focus: the switched skin's card takes focus; if the state push has not
   // rebuilt it yet, focusSkinCard runs again from syncSettingsControls.
   const card = switchTo ? skinCardFor(switchTo) : null;
@@ -454,12 +486,11 @@ async function submitZip() {
     if (pendingToken) await window.settingsAPI?.cancelSkinPack?.(pendingToken);
     clearPreview();
     if (switchTo) {
-      setDropState('success', `这个皮肤包已经导入过，已切换到「${existingName}」。`);
       switchToPack(switchTo, existingName);
       return;
     }
     // Nothing to switch to: the preview said 知道了, so only acknowledge.
-    setDropState('success', '这个皮肤包已经导入过，没有重复导入。');
+    setDropState('existing', '这个皮肤包已经导入过，没有重复导入。');
     setStatus('');
     focusDrop();
     return;
@@ -489,7 +520,7 @@ async function submitZip() {
       setStatus(done);
       live(done);
       clearPreview();
-      setDropState('success', done);
+      setDropState('existing', done);
       // A toast with 切换到它 puts focus on that button; without a switch target
       // the result is just acknowledged and focus returns to the drop zone.
       showNotice(done, switchTo

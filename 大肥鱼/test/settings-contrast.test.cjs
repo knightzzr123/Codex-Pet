@@ -95,3 +95,11 @@ test('V4 深色滚动条跟随主题：10px 轨道、thumb 对背景 ≥3:1', ()
   assert.doesNotMatch(css, /(^|\n)\s*(body|html)::-webkit-scrollbar/);
   assert.match(blockAfter(css, '.settings-content {'), /overflow: auto/);
 });
+
+test('隐藏元素、深色与高对比主题的基础样式仍然存在', () => {
+  const css = fs.readFileSync(path.join(__dirname, '..', 'src', 'settings.css'), 'utf8');
+  assert.match(css, /\[hidden\] \{ display: none !important; \}/);
+  assert.match(css, /prefers-color-scheme: dark/);
+  assert.match(css, /forced-colors: active/);
+  assert.match(css, /border: 4px solid CanvasText/);
+});
