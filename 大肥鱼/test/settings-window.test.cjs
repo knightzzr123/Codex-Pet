@@ -181,6 +181,17 @@ test('设置窗开着时 app.quit 能完成', () => {
   assert.equal(settings.prevented, 1, '退出标志设置后 close 不再 preventDefault');
   assert.equal(settingsCloseBlocked({ __loadFailed: true }), false);
   assert.equal(settingsCloseBlocked({ __rendererGone: true }), false);
+
+  // B12 / G0-2: main.cjs cannot be loaded here without Electron, so the one
+  // invariant quit depends on is checked on its source: the flag must be set
+  // before close(), otherwise the close guard blocks app.quit forever.
+  const main = fs.readFileSync(path.join(root, 'src', 'main.cjs'), 'utf8');
+  assert.match(main, /before-quit/);
+  assert.match(main, /settingsWindow\.__allowClose = true/);
+  assert.match(main, /settingsWindow\.close\(\)/);
+  const quit = main.slice(main.indexOf("app.on('before-quit'"));
+  assert.ok(quit.indexOf('settingsWindow.__allowClose = true') < quit.indexOf('settingsWindow.close()'),
+    'before-quit 必须先设标志再关闭设置窗口');
 });
 
 test('已有设置窗口时只聚焦，不新建', () => {
@@ -704,4 +715,20 @@ test('设置窗口不挂在宠物窗口下，并保留自己的任务栏按钮',
   assert.equal(options.skipTaskbar, false, '保留自己的任务栏按钮');
   assert.equal(options.fullscreenable, false);
   assert.equal(win, windows[0]);
+});
+
+test('主进程不用托盘，Ctrl+, 与菜单项都打开同一个设置窗口', () => {
+  // Electron-only main process: these are minimal source invariants, not DOM
+  // or renderer assertions.
+  const main = fs.readFileSync(path.join(root, 'src', 'main.cjs'), 'utf8');
+  assert.doesNotMatch(main, /new Tray/, '不再使用托盘入口');
+  assert.match(main, /before-input-event/);
+  const shortcut = main.slice(main.indexOf("win.webContents.on('before-input-event'"));
+  const handlerEnd = shortcut.indexOf('publish();');
+  assert.ok(handlerEnd > 0, 'before-input-event 处理器紧接着 publish()');
+  const handler = shortcut.slice(0, handlerEnd);
+  assert.match(handler, /input\.control/);
+  assert.match(handler, /input\.key === ','/);
+  assert.match(handler, /openSettingsPanel\(\)/);
+  assert.match(main, /\{ label: '打开设置…', enabled: !busySkin, click: openSettingsPanel \}/);
 });
