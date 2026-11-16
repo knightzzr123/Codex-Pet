@@ -244,6 +244,23 @@ test('符号链接', t => {
   assert.equal(rejected.token, undefined);
 });
 
+test('根目录有真实 manifest 时，指向另一皮肤包的目录链接不影响导入', async t => {
+  const root = temporary(t);
+  const { library, session } = sessionFor(root);
+  const other = writePack(root, 56, '另一皮肤包', { id: 'other-pack' });
+  const directory = writePack(root, 57, '主皮肤包', { id: 'main-pack' });
+  fs.symlinkSync(other, path.join(directory, 'sibling-pack'), 'dir');
+  const registered = session.register(directory, 1);
+  assert.equal(registered.ok, true, registered.error);
+  const preview = await session.preview(registered.token, 1);
+  assert.equal(preview.ok, true, preview.error);
+  assert.equal(preview.name, '主皮肤包');
+  const committed = await session.commit(registered.token, 1);
+  assert.equal(committed.ok, true, committed.error);
+  assert.equal(library.list().length, 1);
+  assert.equal(library.list()[0].name, '主皮肤包');
+});
+
 test('preview 后目录被篡改', async t => {
   const root = temporary(t);
   const { session } = sessionFor(root);

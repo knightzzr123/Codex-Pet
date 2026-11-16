@@ -194,6 +194,75 @@ test('manifest.json 所在顶层目录是链接时给出 ZIP_SYMLINK', t => {
     error => error.code === 'ZIP_SYMLINK' && /符号链接|目录联接/.test(error.message));
 });
 
+test('根目录已有真实 manifest 时，指向另一皮肤包的目录链接被跳过', t => {
+  const root = temporary(t);
+  const directory = writePack(root, {
+    name: '主包',
+    characters: [{ id: 'whale', name: '鲸鱼', image: 'whale.png' }]
+  });
+  const other = writePack(root, {
+    name: '另一皮肤包',
+    characters: [{ id: 'rose', name: '玫瑰', image: 'rose.png' }]
+  });
+  fs.symlinkSync(other, path.join(directory, 'sibling-pack'), 'dir');
+  const stat = fs.statSync;
+  const statCalls = [];
+  // The link decision must not follow the link: a UNC junction would turn
+  // statSync into an SMB round trip. Only lstat is allowed here.
+  t.mock.method(fs, 'statSync', function (target, ...args) {
+    statCalls.push(path.resolve(String(target)));
+    return stat.call(fs, target, ...args);
+  });
+  assert.equal(findManifestDirectory(directory), directory);
+  assert.deepEqual(statCalls, [], '判断链接目录下有没有 manifest 时不能跟随链接');
+});
+
+test('只有链接目录含 manifest 时才报 ZIP_SYMLINK，且不调用 statSync', t => {
+  const root = temporary(t);
+  const real = writePack(root, {
+    name: '真实皮肤包',
+    characters: [{ id: 'whale', name: '鲸鱼', image: 'whale.png' }]
+  });
+  const wrapper = fs.mkdtempSync(path.join(root, 'wrapper-'));
+  fs.symlinkSync(real, path.join(wrapper, 'pack'), 'dir');
+  const stat = fs.statSync;
+  const statCalls = [];
+  t.mock.method(fs, 'statSync', function (target, ...args) {
+    statCalls.push(path.resolve(String(target)));
+    return stat.call(fs, target, ...args);
+  });
+  assert.throws(() => findManifestDirectory(wrapper),
+    error => error.code === 'ZIP_SYMLINK' && /皮肤包所在目录/.test(error.message));
+  assert.deepEqual(statCalls, [], '链接候选只允许 lstat，不得跟随');
+});
+
+test('选中根目录 lstat 失败时按原因给 ZIP_ACCESS 或「文件夹不存在」', t => {
+  const root = temporary(t);
+  const target = path.join(root, 'selected-pack');
+  const cases = [
+    ['EACCES', 'ZIP_ACCESS', /没有权限读取皮肤包文件夹/],
+    ['EPERM', 'ZIP_ACCESS', /没有权限读取皮肤包文件夹/],
+    ['EBUSY', 'ZIP_ACCESS', /没有权限读取皮肤包文件夹/],
+    ['ENOENT', 'PACK_INVALID', /文件夹不存在/],
+    ['ENOTDIR', 'PACK_INVALID', /文件夹不存在/]
+  ];
+  for (const [code, expectedCode, expectedMessage] of cases) {
+    t.mock.method(fs, 'lstatSync', () => {
+      throw Object.assign(new Error(`mock ${code}`), { code });
+    });
+    try {
+      assert.throws(() => assertNoSymlinks(target), error => {
+        assert.equal(error.code, expectedCode, code);
+        assert.match(error.message, expectedMessage, code);
+        assert.doesNotMatch(error.message, /EACCES|EPERM|EBUSY|ENOENT|ENOTDIR/, code);
+        return true;
+      });
+    } finally {
+      t.mock.restoreAll();
+    }
+  }
+});
+
 test('顶层 lstat 抛 EBUSY 时跳过该条目，不外抛系统错误', t => {
   const root = temporary(t);
   const directory = writePack(root, {

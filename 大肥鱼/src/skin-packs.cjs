@@ -214,6 +214,12 @@ function findManifestDirectory(root) {
     top.push({ name, full, stat });
   }
   const found = [];
+  // A link/junction is looked at with lstat only, never followed with stat():
+  // a UNC link must not trigger an SMB round trip just to decide whether it is
+  // a directory. A linked directory that holds a manifest is remembered, but
+  // it only becomes an error when it is the sole candidate — an unrelated link
+  // next to a real pack must not reject the import (D-A4-SIBLING).
+  const linked = [];
   const manifestEntry = top.find(item => item.name === 'manifest.json');
   if (manifestEntry) {
     if (manifestEntry.stat.isSymbolicLink()) {
@@ -227,18 +233,9 @@ function findManifestDirectory(root) {
   for (const item of top) {
     if (item.name === 'manifest.json') continue;
     if (item.stat.isSymbolicLink()) {
-      // An unrelated link/junction is skipped without being followed into the
-      // tree. It is only rejected when it is the directory that holds this
-      // pack's manifest, because then the manifest path itself runs through a
-      // link.
-      let target;
-      try { target = fs.statSync(item.full); } catch { continue; }
-      if (!target.isDirectory()) continue;
       let nestedStat;
       try { nestedStat = fs.lstatSync(path.join(item.full, 'manifest.json')); } catch { continue; }
-      if (nestedStat.isSymbolicLink() || nestedStat.isFile()) {
-        throw codedError('皮肤包所在目录不能是符号链接或目录联接。', 'ZIP_SYMLINK');
-      }
+      if (nestedStat.isSymbolicLink() || nestedStat.isFile()) linked.push(item.full);
       continue;
     }
     if (!item.stat.isDirectory()) continue;
@@ -249,6 +246,11 @@ function findManifestDirectory(root) {
       throw codedError('皮肤包里的 manifest.json 不能是符号链接或目录联接。', 'ZIP_SYMLINK');
     }
     if (nestedStat.isFile()) found.push(item.full);
+  }
+  if (!found.length && linked.length) {
+    // No real pack anywhere: the only candidate manifest sits behind a link,
+    // so the path we would read runs through that link.
+    throw codedError('皮肤包所在目录不能是符号链接或目录联接。', 'ZIP_SYMLINK');
   }
   if (!found.length) {
     // No manifest at an allowed depth. Look one level deeper only to keep the
@@ -370,9 +372,18 @@ function assertNoSymlinks(root, options = {}) {
   const references = Array.isArray(options.references) ? options.references : ['manifest.json'];
   let rootStat;
   try { rootStat = fs.lstatSync(source); }
-  catch { throw codedError('皮肤包文件夹无法读取。', 'ZIP_FORMAT'); }
+  catch (error) {
+    const code = typeof error?.code === 'string' ? error.code : '';
+    if (code === 'ENOENT' || code === 'ENOTDIR') {
+      throw codedError('文件夹不存在，请重新选择皮肤包文件夹。', 'PACK_INVALID');
+    }
+    if (code === 'EACCES' || code === 'EPERM' || code === 'EBUSY') {
+      throw codedError('没有权限读取皮肤包文件夹。', 'ZIP_ACCESS');
+    }
+    throw codedError('皮肤包文件夹无法读取。', 'ZIP_ACCESS');
+  }
   if (rootStat.isSymbolicLink()) throw codedError('皮肤包文件夹不能是符号链接或目录联接。', 'ZIP_SYMLINK');
-  if (!rootStat.isDirectory()) throw codedError('皮肤包需要选择文件夹。', 'ZIP_FORMAT');
+  if (!rootStat.isDirectory()) throw codedError('皮肤包需要选择文件夹。', 'PACK_INVALID');
   const checked = new Set();
   let count = 0;
   for (const reference of references) {
