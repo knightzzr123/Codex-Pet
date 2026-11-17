@@ -458,16 +458,28 @@ async function previewToken(token) {
   }
 }
 
+// D-16CB-CHOOSE-UNHANDLED: the single-image branch rejects instead of
+// returning a result. Its IPC rejection text is English and may embed a path,
+// so the drop zone shows the same sentence as the import dialog and returns to
+// a state where the user can choose again.
+const IMAGE_IMPORT_FAILED = '这张图片无法显示，可能已损坏。请换一张图片。';
+
 async function choosePack(mode) {
   setDropState('busy');
-  const chosen = await window.settingsAPI?.chooseSkinPack?.(mode);
-  if (chosen?.ok && chosen.token) await previewToken(chosen.token);
-  else if (chosen?.ok && chosen.image) {
-    setDropState('idle');
-    live(chosen.canceled ? '已取消图片导入' : '图片已导入');
-  } else if (chosen?.ok && chosen.canceled) setDropState('idle');
-  else if (chosen && chosen.ok === false) rejectPack(chosen);
-  else setDropState('idle');
+  try {
+    const chosen = await window.settingsAPI?.chooseSkinPack?.(mode);
+    if (chosen?.ok && chosen.token) await previewToken(chosen.token);
+    else if (chosen?.ok && chosen.image) {
+      setDropState('idle');
+      live(chosen.canceled ? '已取消图片导入' : '图片已导入');
+    } else if (chosen?.ok && chosen.canceled) setDropState('idle');
+    else if (chosen && chosen.ok === false) rejectPack(chosen);
+    else setDropState('idle');
+  } catch {
+    // rejectPack() re-enables the buttons, hides the busy text, announces the
+    // failure and moves focus back to the drop zone.
+    rejectPack({ code: 'PACK_INVALID', error: IMAGE_IMPORT_FAILED });
+  }
 }
 
 let importingZip = false;

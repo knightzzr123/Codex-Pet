@@ -150,6 +150,27 @@ test('真实解码失败的图片不会生成空白皮肤包，正常图片仍�
   assert.equal(library.list().length, 1);
 });
 
+test('main.cjs 导入图片失败时原样透传 userError，IO 失败才用通用提示（D-16CB-DIALOG-CODE）', () => {
+  const main = fs.readFileSync(path.join(__dirname, '..', 'src', 'main.cjs'), 'utf8');
+  const start = main.indexOf('async function chooseSkinImage(event) {');
+  const end = main.indexOf('async function deleteImportedSkin', start);
+  assert.ok(start > 0 && end > start, '找不到 chooseSkinImage');
+  const block = main.slice(start, end);
+  // main.cjs cannot be loaded without Electron, so the catch contract is
+  // checked on the block itself. userError() always carries a code, therefore
+  // the user-facing check must come before the code-based IO fallback.
+  assert.match(block, /isUserFacingError\(error\)/);
+  assert.match(block, /error\.message/);
+  assert.match(block, /无法读取或保存图片，请确认文件存在且目录可写。/);
+  const userFacing = block.indexOf('isUserFacingError(error)');
+  const ioFallback = block.indexOf('error.code');
+  assert.ok(userFacing > 0 && ioFallback > userFacing,
+    'userError 必须先于 error.code 判断，否则 PACK_INVALID 又被换成通用 IO 句');
+  assert.doesNotMatch(block, /detail: error\.code \?/);
+  // The sentence itself keeps the wording the settings window and QA expect.
+  assert.match(main, /throw userError\('这张图片无法显示，可能已损坏。请换一张图片。'\);/);
+});
+
 test('main.cjs 用 createImageBitmap 真实解码，并保留 10 秒超时和诊断日志', () => {
   const main = fs.readFileSync(path.join(__dirname, '..', 'src', 'main.cjs'), 'utf8');
   const start = main.indexOf('async function validateSkinImage(bytes, mime) {');

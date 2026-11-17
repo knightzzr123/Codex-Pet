@@ -598,6 +598,42 @@ test('预览失败时焦点回到拖拽区并只播报一次错误', async () =>
   assert.equal(f.doc.activeElement, f.get('settings-zip-drop'));
 });
 
+test('「选择文件…」选坏图时给同一句中文提示并恢复可再次选择（D-16CB-CHOOSE-UNHANDLED）', async () => {
+  const f = fixture();
+  const assertive = liveRecorder(f, 'settings-live-assertive');
+  const failed = '这张图片无法显示，可能已损坏。请换一张图片。';
+  f.api.chooseSkinPack = async () => {
+    // Electron rejects ipcRenderer.invoke with an English wrapper; the path
+    // comes from the native dialog / fs error. Neither may reach the UI.
+    throw new Error("Error invoking remote method 'skin-pack:choose': Error: "
+      + "ENOENT: no such file or directory, open '/home/qa/private/bad.png'");
+  };
+  f.get('settings-import-zip').emit('click', { stopPropagation() {} });
+  await new Promise(resolve => setTimeout(resolve, 0));
+
+  const drop = f.get('settings-zip-drop');
+  assert.equal(drop.dataset.state, 'error');
+  assert.equal(f.get('settings-drop-title').textContent, '导入失败');
+  assert.equal(f.get('settings-drop-detail').textContent, failed);
+  assert.deepEqual(assertive.writes, [failed]);
+  assert.equal(f.get('settings-zip-status').textContent, failed);
+  const visible = [f.get('settings-drop-title').textContent, f.get('settings-drop-detail').textContent,
+    f.get('settings-zip-status').textContent, assertive.value()].join('\n');
+  assert.doesNotMatch(visible, /ENOENT|Error|invoking|\/home\/qa|bad\.png/);
+  for (const id of ['settings-import-zip', 'settings-import-pack', 'settings-import-skin']) {
+    assert.equal(f.get(id).disabled, false, id);
+  }
+  assert.equal(f.doc.activeElement, drop);
+
+  // The same buttons can start another selection: the state must not stay busy.
+  f.api.chooseSkinPack = async () => ({ ok: true, image: true, canceled: true });
+  f.get('settings-import-zip').emit('click', { stopPropagation() {} });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(drop.dataset.state, 'idle');
+  assert.equal(f.get('settings-drop-title').textContent, '将 .zip 或皮肤包文件夹拖到此处');
+  assert.equal(f.get('settings-live').textContent, '已取消图片导入');
+});
+
 test('预览返回错误码时焦点回到拖拽区，损坏格式只显示统一中文', async () => {
   const f = fixture();
   const assertive = liveRecorder(f, 'settings-live-assertive');
