@@ -1,12 +1,12 @@
 # 大肥鱼 · Codex 角色插件
 
-Windows 10/11 x64 本地角色插件，基于 3.3.2 项目持续维护。当前展示版本标签为 `Codex-Pet-V1.3`。
+Windows 10/11 x64 本地角色插件，基于 3.4.0 项目持续维护。当前展示版本标签为 `Codex-Pet-V1.4`。
 
 ## 功能
 
 - 点击人物查看 Codex 剩余额度，点击椭圆气泡继续中文对话。
 - 鼠标和触摸拖动、边缘吸附、十档大小；气泡跟随人物移动和按压。
-- 图片皮肤导入、缩放、裁剪、切换与删除；支持带 `manifest.json` 的多角色皮肤包文件夹，同一窗口内本地切换。
+- 图片皮肤导入、缩放、裁剪、切换与删除；支持带 `manifest.json` 的多角色皮肤包文件夹和 ZIP。`manifest.json` 只能在根目录或唯一一层顶层目录，图片可以放在该目录的子目录里。ZIP 里的 `__MACOSX`、`.DS_Store`、`Thumbs.db`、`.txt`、`.md`，以及没有扩展名的 `LICENSE` / `LICENCE` / `README` 会静默跳过；其它未知扩展名会拒绝整个包。
 - 自定义台词，可编辑、新增和删除，保存后立即生效；点击与闲置触发带冷却/去重，不读取关键词或对话正文。
 - 偏好导入/导出：只包含设置与皮肤清单，不打包图片、缩略图或自定义台词。
 - 只读会话状态灯：Codex 忙碌/空闲/报错时显示不同文案与提示；报错气泡节流，探测失败按空闲降级，不读取对话正文。
@@ -72,13 +72,32 @@ Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
 
 ## 打包与发布
 
-打包需要 Python 3.11+，可从已有完整安装包复用经过校验的运行时：
+打包需要 Python 3.11+，可从已有完整安装包复用经过校验的运行时。发布目录里直接用正式资产名，并把压缩包、解压后的 `大肥鱼\` 和 `SHA256SUMS` 放在同一层——`release-check --package` 会在该层按 `SHA256SUMS` 里的名字找产物，名字对不上就会报「产物不存在」：
 
 ```powershell
-python tools/package.py --original "完整安装包.zip" --output "..\大肥鱼-完整安装包.zip" --version 3.3.2
+New-Item -ItemType Directory -Force ..\release | Out-Null
+python tools/package.py --original "完整安装包.zip" `
+  --output "..\release\dafeiyu-codex-pet-3.4.0-windows-x64.zip" --version 3.4.0
+python tools/package-source.py --output "..\release\dafeiyu-codex-pet-3.4.0-source.zip"
 ```
 
-`--version` 默认值现已与源码对齐为 `3.3.2`，仍建议显式传入以免误用。`tools/package-source.py` 生成带 `PACKAGE-TYPE.json` 的源码包，不能当作完整安装包直接安装。完整安装包必须包含通过 `runtime-manifest.json` 校验的 `runtime.7z`。展示标签为 `Codex-Pet-V1.3`。
+`--version` 默认值现已与源码对齐为 `3.4.0`，仍建议显式传入以免误用。`tools/package-source.py` 生成带 `PACKAGE-TYPE.json` 的源码包，不能当作完整安装包直接安装。两个打包脚本都会在产物旁写出 `<产物名>.sha256`（LF），且不会覆盖 `SHA256SUMS`。
+
+顺序是先自检、再汇总、汇总后再自检：解压完整包时还没有 `SHA256SUMS`，第一次自检只验证包结构；汇总脚本会核对两个包内的 `PACKAGE-TYPE.json`，把 `--complete` 与 `--source` 写反会直接报错退出；最后再自检一次，确认 `SHA256SUMS` 指向的正式资产确实都在发布目录里：
+
+```powershell
+Expand-Archive "..\release\dafeiyu-codex-pet-3.4.0-windows-x64.zip" -DestinationPath "..\release" -Force
+node tools/release-check.cjs --package "..\release\大肥鱼"
+
+python tools/write-sha256sums.py --version 3.4.0 `
+  --complete "..\release\dafeiyu-codex-pet-3.4.0-windows-x64.zip" `
+  --source "..\release\dafeiyu-codex-pet-3.4.0-source.zip" `
+  --output "..\release\SHA256SUMS"
+
+node tools/release-check.cjs --package "..\release\大肥鱼"
+```
+
+完整安装包必须包含通过 `runtime-manifest.json` 校验的 `runtime.7z`。展示标签为 `Codex-Pet-V1.4`。
 
 仓库保留源码、资源、测试和第三方许可证。运行时、安装包、用户数据和诊断文件由 `.gitignore` 排除；完整安装包作为 GitHub Releases 附件发布。
 

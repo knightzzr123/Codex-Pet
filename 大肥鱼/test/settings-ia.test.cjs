@@ -8,12 +8,14 @@ const {
 } = require('../src/settings-ia.cjs');
 const { OPACITY_MIN } = require('../src/experience.cjs');
 
-test('IA 2.0 分组包含外观/对话/行为/显示且覆盖可重置项', () => {
-  assert.deepEqual(SETTINGS_GROUPS.map(group => group.id), ['appearance', 'dialogue', 'behavior', 'visibility']);
-  assert.deepEqual(GROUP_KEYS.appearance, ['skinId', 'sizeLevel']);
+test('设置分组为外观/对话/行为/无障碍，透明度在外观，减少动画在无障碍', () => {
+  assert.deepEqual(SETTINGS_GROUPS.map(group => group.id), ['appearance', 'dialogue', 'behavior', 'accessibility']);
+  assert.deepEqual(GROUP_KEYS.appearance, ['skinId', 'sizeLevel', 'opacity', 'colorScheme']);
   assert.ok(GROUP_KEYS.dialogue.includes('bubbleSeconds'));
-  assert.ok(GROUP_KEYS.behavior.includes('idleIntervalSec'));
+  assert.deepEqual(GROUP_KEYS.behavior, ['idleIntervalSec', 'mirrorOnLeft']);
+  assert.deepEqual(GROUP_KEYS.accessibility, ['reducedMotion']);
   assert.deepEqual(GROUP_KEYS.visibility, ['opacity']);
+  assert.equal(settingsKeyDefault('colorScheme'), 'system');
   assert.ok(ALL_RESET_KEYS.includes('opacity'));
   assert.ok(ALL_RESET_KEYS.includes('reducedMotion'));
   assert.equal(settingsKeyDefault('opacity'), 1);
@@ -63,7 +65,7 @@ test('恢复默认覆盖全部可调项但保留位置和自定义台词', () =>
 });
 
 test('默认值可重复应用且非法键不产生改动', () => {
-  const preferences = { ...DEFAULT_EXPERIENCE, skinId: 'default', sizeLevel: DEFAULT_SIZE_LEVEL };
+  const preferences = { ...DEFAULT_EXPERIENCE, skinId: 'default', sizeLevel: DEFAULT_SIZE_LEVEL, colorScheme: 'system' };
   const again = resetAll(preferences);
   assert.deepEqual(again.changed, []);
   assert.deepEqual(again.preferences, preferences);
@@ -73,11 +75,11 @@ test('默认值可重复应用且非法键不产生改动', () => {
 });
 
 test('面板与主进程接线包含单项重置、分组重置和恢复默认', () => {
-  const html = fs.readFileSync(path.join(__dirname, '..', 'src', 'index.html'), 'utf8');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'src', 'settings.html'), 'utf8');
   const main = fs.readFileSync(path.join(__dirname, '..', 'src', 'main.cjs'), 'utf8');
-  const preload = fs.readFileSync(path.join(__dirname, '..', 'src', 'preload.cjs'), 'utf8');
-  const renderer = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer.js'), 'utf8');
-  for (const group of ['appearance', 'dialogue', 'behavior', 'visibility']) {
+  const preload = fs.readFileSync(path.join(__dirname, '..', 'src', 'settings-preload.cjs'), 'utf8');
+  const renderer = fs.readFileSync(path.join(__dirname, '..', 'src', 'settings.js'), 'utf8');
+  for (const group of ['appearance', 'dialogue', 'behavior', 'accessibility']) {
     assert.match(html, new RegExp(`data-reset-group="${group}"`));
   }
   assert.match(html, /id="settings-reset-all"/);

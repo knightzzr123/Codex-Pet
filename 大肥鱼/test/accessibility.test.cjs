@@ -91,56 +91,36 @@ function fixture() {
   };
 }
 
-test('设置面板是带名称和说明的模态对话框，打开后聚焦关闭按钮，Esc 后回到角色', () => {
+test('角色窗口不再内嵌设置对话框，Esc 仍收起气泡并回到角色', () => {
   const f = fixture();
-  const panel = f.get('settings-panel'), close = f.get('settings-close');
-  assert.equal(panel.hidden, true);
-  f.api.openSettings();
-  assert.equal(panel.hidden, false);
-  assert.equal(panel.ariaHidden, 'false');
-  assert.equal(close.focused, true);
-  assert.equal(f.doc.activeElement, close);
+  assert.equal(f.get('settings-panel').hidden, true);
   f.emitWindow('keydown', { key: 'Escape' });
-  assert.equal(panel.hidden, true);
-  assert.equal(panel.ariaHidden, 'true');
   assert.equal(f.get('pet').focused, true);
+  assert.doesNotMatch(source, /id="settings-panel"|settings-panel/);
 });
 
-test('Tab 与 Shift+Tab 在设置面板内循环，不把焦点丢到窗口外', () => {
-  const f = fixture();
-  const panel = f.get('settings-panel'), close = f.get('settings-close'), action = f.get('settings-import-skin');
-  f.api.openSettings();
-  panel.focusables = [close, action];
-  close.focus();
-  panel.emit('keydown', { key: 'Tab', shiftKey: true });
-  assert.equal(action.focused, true);
-  action.focus();
-  panel.emit('keydown', { key: 'Tab', shiftKey: false });
-  assert.equal(close.focused, true);
-});
-
-test('HTML 补齐读屏名称、单选语义与范围控件标签', () => {
-  const html = fs.readFileSync(path.join(root, 'src', 'index.html'), 'utf8');
+test('设置对话框的读屏名称和焦点循环在独立设置窗口里', () => {
+  const html = fs.readFileSync(path.join(root, 'src', 'settings.html'), 'utf8');
+  const settings = fs.readFileSync(path.join(root, 'src', 'settings.js'), 'utf8');
   assert.match(html, /role="dialog"/);
-  assert.match(html, /aria-modal="true"/);
+  assert.doesNotMatch(html, /aria-modal="true"/);
+  assert.match(html, /aria-orientation="vertical"/);
   assert.match(html, /aria-labelledby="settings-title"/);
   assert.match(html, /aria-describedby="settings-intro"/);
   assert.match(html, /id="settings-title"/);
   for (const id of ['settings-bubble-x', 'settings-bubble-y', 'settings-idle', 'settings-opacity']) {
-    assert.match(html, new RegExp(`id="${id}"[^>]*aria-label=`), id);
+    assert.match(html, new RegExp(`<label[^>]*for="${id}"`), id);
+    assert.match(html, new RegExp(`id="${id}"[^>]*type="range"`), id);
   }
   assert.match(html, /id="settings-skins"[^>]*role="radiogroup"/);
   assert.match(html, /aria-checked="true"[^>]*data-bubble-seconds="8"/);
   assert.match(html, /id="settings-close"[^>]*aria-label="关闭设置"/);
-});
-
-test('渲染层维护返回焦点、aria-checked 与皮肤按钮读屏状态', () => {
-  assert.match(source, /settingsReturnFocus/);
-  assert.match(source, /settings-close'\)\?\.focus/);
-  assert.match(source, /event\.key !== 'Tab'/);
-  assert.match(source, /aria-checked/);
-  assert.match(source, /aria-pressed/);
-  assert.match(source, /aria-label', `\$\{active \? '当前角色' : '切换到'\}/);
+  assert.match(settings, /settingsReturnFocus/);
+  assert.match(settings, /settings-close'\)\?\.focus/);
+  assert.match(settings, /event\.key !== 'Tab'/);
+  assert.match(settings, /aria-checked/);
+  assert.match(settings, /aria-pressed/);
+  assert.match(settings, /aria-label', `\$\{active \? '当前角色' : '切换到'\}/);
 });
 
 test('高对比使用 forced-colors 系统色、真实边框与焦点环，并说明皮肤图限制', () => {

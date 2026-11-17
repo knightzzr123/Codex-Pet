@@ -3,13 +3,13 @@ const {
 } = require('./manifests.cjs');
 const { experienceFromPreferences } = require('./experience.cjs');
 const { sizeLevelFromPreferences } = require('./size.cjs');
-const { DEFAULT_SKIN_ID } = require('./settings-ia.cjs');
+const { DEFAULT_SKIN_ID, normalizeColorScheme } = require('./settings-ia.cjs');
 
 const PREFERENCES_FILE_NAME = 'dafeiyu-preferences.json';
 const PREFERENCES_FILE_MAX_BYTES = 256 * 1024;
 const PORTABLE_SETTING_KEYS = Object.freeze([
   'skinId', 'sizeLevel', 'bubbleSeconds', 'advanceOnPetTap', 'mirrorOnLeft', 'reducedMotion',
-  'bubbleOffsetX', 'bubbleOffsetY', 'idleIntervalSec', 'opacity'
+  'bubbleOffsetX', 'bubbleOffsetY', 'idleIntervalSec', 'opacity', 'colorScheme'
 ]);
 const BUNDLE_KINDS = Object.freeze(['builtin', 'image', 'pack']);
 
@@ -40,7 +40,8 @@ function buildPreferencesBundle(preferences = {}, catalog = [], { exportedAt = n
     settings: {
       skinId: typeof preferences.skinId === 'string' && preferences.skinId ? preferences.skinId : DEFAULT_SKIN_ID,
       sizeLevel: sizeLevelFromPreferences(preferences),
-      ...experience
+      ...experience,
+      colorScheme: normalizeColorScheme(preferences.colorScheme)
     },
     skins: {
       selected: typeof preferences.skinId === 'string' && preferences.skinId ? preferences.skinId : DEFAULT_SKIN_ID,
@@ -75,7 +76,7 @@ function parsePreferencesBundle(input, { catalog = [] } = {}) {
   return {
     manifestVersion: MANIFEST_VERSION,
     exportedAt: typeof value.exportedAt === 'string' ? value.exportedAt : '',
-    settings: { skinId, sizeLevel: sizeLevelFromPreferences(picked), ...experience },
+    settings: { skinId, sizeLevel: sizeLevelFromPreferences(picked), ...experience, colorScheme: normalizeColorScheme(picked.colorScheme) },
     skins: {
       selected: skinId,
       catalog: publicCatalog(catalog),

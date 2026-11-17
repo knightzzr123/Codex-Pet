@@ -16,7 +16,7 @@ runtime_source.add_argument('--runtime-archive', type=Path, help='Use a standalo
 parser.add_argument('--output', type=Path, required=True)
 parser.add_argument('--verify-directory', type=Path)
 parser.add_argument('--metadata-directory', type=Path)
-parser.add_argument('--version', default='3.3.2')
+parser.add_argument('--version', default='3.4.0')
 args = parser.parse_args()
 root = args.root.resolve()
 output = args.output.resolve()
@@ -149,7 +149,9 @@ for relative in ('src/launch-desktop-pet.ps1', 'src/codex-scope.ps1', 'install-a
 
 checksum = digest(output)
 metadata_directory.mkdir(parents=True, exist_ok=True)
-(metadata_directory / (output.name + '.sha256')).write_text(f'{checksum}  {output.name}\n', encoding='utf-8')
+checksum_line = f'{checksum}  {output.name}\n'
+(output.parent / (output.name + '.sha256')).write_text(checksum_line, encoding='utf-8', newline='\n')
+(metadata_directory / (output.name + '.sha256')).write_text(checksum_line, encoding='utf-8', newline='\n')
 report = {
     'packageType': 'complete', 'version': args.version, 'archive': str(output), 'bytes': output.stat().st_size,
     'sha256': checksum, 'files': len(hashes), 'zipCrcVerified': True,

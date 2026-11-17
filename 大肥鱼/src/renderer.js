@@ -17,7 +17,6 @@ let previousRemaining = null;
 let otherRowsText = '';
 let pauseStarted = null;
 let settingsOpen = false;
-let settingsReturnFocus = null;
 let idleTimer = null;
 let lastIdleAt = Date.now();
 let lastInteractionAt = Date.now();
@@ -215,116 +214,6 @@ function applyExperienceStyles() {
   root.setProperty('--pet-opacity', String(Math.max(0.35, Math.min(1, opacity))));
 }
 
-function syncSettingsControls() {
-  const panel = $('settings-panel');
-  if (!panel || typeof document.createElement !== 'function') return;
-  try {
-    const experience = state.experience || {};
-    const sizeLevel = state.sizeLevel || 4;
-    const skins = state.skins || [{ id: state.skin?.id || 'default', name: state.skin?.name || '默认' }];
-    const skinBox = $('settings-skins');
-    if (skinBox && typeof skinBox.replaceChildren === 'function') {
-      skinBox.replaceChildren(...skins.map(skin => {
-        const button = document.createElement('button');
-        const active = state.skin?.id === skin.id;
-        button.type = 'button';
-        button.className = `settings-chip${active ? ' is-active' : ''}`;
-        button.title = skin.name;
-        button.setAttribute?.('role', 'radio');
-        button.setAttribute?.('aria-checked', String(active));
-        button.setAttribute?.('aria-pressed', String(active));
-        button.setAttribute?.('aria-label', `${active ? '当前角色' : '切换到'}：${skin.name}`);
-        if (skin.thumbnailUrl && typeof button.append === 'function') {
-          const image = document.createElement('img');
-          image.className = 'settings-chip-thumb';
-          image.src = skin.thumbnailUrl;
-          image.alt = '';
-          image.loading = 'lazy';
-          image.setAttribute?.('aria-hidden', 'true');
-          const label = document.createElement('span');
-          label.textContent = skin.name;
-          button.append(image, label);
-        } else {
-          button.textContent = skin.name;
-        }
-        button.addEventListener('click', () => window.petAPI.setSkin?.(skin.id));
-        return button;
-      }));
-    }
-    const sizeBox = $('settings-size');
-    if (sizeBox && !sizeBox.childElementCount && typeof sizeBox.append === 'function') {
-      for (let level = 1; level <= 10; level += 1) {
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.className = 'settings-size-btn';
-        button.setAttribute('data-level', String(level));
-        button.textContent = `${level}`;
-        button.setAttribute('role', 'radio');
-        button.setAttribute('aria-label', `大小 ${level} 档`);
-        button.addEventListener('click', () => window.petAPI.setSizeLevel?.(level));
-        sizeBox.append(button);
-      }
-    }
-    if (sizeBox && typeof sizeBox.querySelectorAll === 'function') {
-      for (const button of sizeBox.querySelectorAll('.settings-size-btn')) {
-        const active = Number(button.getAttribute('data-level')) === sizeLevel;
-        button.classList.toggle('is-active', active);
-        button.setAttribute('aria-checked', String(active));
-      }
-    }
-    const setRange = (id, valueId, value, format = v => v) => {
-      const input = $(id); const label = $(valueId);
-      if (!input) return;
-      if (document.activeElement !== input) input.value = String(value);
-      if (label) label.textContent = format(value);
-    };
-    setRange('settings-bubble-x', 'settings-bubble-x-value', experience.bubbleOffsetX || 0);
-    setRange('settings-bubble-y', 'settings-bubble-y-value', experience.bubbleOffsetY || 0);
-    setRange('settings-idle', 'settings-idle-value', experience.idleIntervalSec || 45);
-    setRange('settings-opacity', 'settings-opacity-value', experience.opacity ?? 1, v => `${Math.round(Number(v) * 100)}%`);
-    const setToggle = (id, value) => { const input = $(id); if (input) input.checked = Boolean(value); };
-    setToggle('settings-advance', experience.advanceOnPetTap);
-    setToggle('settings-mirror', experience.mirrorOnLeft !== false);
-    setToggle('settings-reduced', experience.reducedMotion);
-    const seconds = experience.bubbleSeconds ?? 8;
-    const secondsValue = $('settings-bubble-seconds-value');
-    if (secondsValue) secondsValue.textContent = seconds === 0 ? '保持显示' : `${seconds} 秒`;
-    const sizeValue = $('settings-size-value');
-    if (sizeValue) sizeValue.textContent = `${sizeLevel} 档`;
-    for (const button of panel.querySelectorAll?.('[data-bubble-seconds]') || []) {
-      const active = Number(button.getAttribute('data-bubble-seconds')) === seconds;
-      button.classList.toggle('is-active', active);
-      button.setAttribute('aria-checked', String(active));
-    }
-  } catch {
-    // Unit fixture DOM is intentionally incomplete.
-  }
-}
-
-function setSettingsOpen(open) {
-  const next = Boolean(open);
-  if (next === settingsOpen) {
-    if (next) $('settings-close')?.focus?.({ preventScroll: true });
-    return;
-  }
-  if (next) settingsReturnFocus = document.activeElement || null;
-  settingsOpen = next;
-  const panel = $('settings-panel');
-  if (!panel) return;
-  panel.hidden = !settingsOpen;
-  panel.ariaHidden = String(!settingsOpen);
-  document.body.classList.toggle('settings-open', settingsOpen);
-  // Keep native hit-testing large enough for the panel without blocking pet drag when closed.
-  globalThis.petAPI.setInputRegion(settingsOpen || bubbleIsOpen());
-  if (settingsOpen) {
-    $('settings-close')?.focus?.({ preventScroll: true });
-  } else {
-    const target = settingsReturnFocus && settingsReturnFocus !== document.body ? settingsReturnFocus : $('pet');
-    try { target?.focus?.({ preventScroll: true }); } catch {}
-    settingsReturnFocus = null;
-  }
-}
-
 function maybeIdleAction() {
   if (reducedMotion() || settingsOpen || pointerDrag || bubbleIsOpen()) return;
   if (Date.now() - lastIdleAt < idleIntervalMs()) return;
@@ -351,6 +240,7 @@ function playIdleNudge() {
 }
 
 function render() {
+  settingsOpen = state.settingsOpen === true;
   reportReducedMotion();
   applyExperienceStyles();
   const skinUrl = state.skin?.url || '../assets/pet.png';
@@ -376,7 +266,7 @@ function render() {
     $(id).inert = !active;
     $(id).ariaHidden = String(!active);
   }
-  if (bubbleVisible || settingsOpen) {
+  if (bubbleVisible) {
     clearTimeout(inputHideTimer);
     inputHideTimer = null;
     if (inputBubble !== true) {
@@ -448,7 +338,6 @@ function render() {
   $('refresh').ariaBusy = String(state.loading);
   $('refresh').title = state.loading ? '正在刷新额度' : cooldown ? `${cooldown} 秒后可再次刷新` : '刷新额度';
   applySessionState();
-  syncSettingsControls();
 }
 
 function pat() {
@@ -506,7 +395,6 @@ for (const id of ['pet', 'bubble']) {
 }
 $('pet').addEventListener('pointerdown', event => {
   if (event.button !== 0 || event.isPrimary === false) return;
-  // Settings panel stays open; dragging the pet must still work (panel does not capture pet).
   cancelDrag();
   cancelPetMotion();
   markInteraction();
@@ -593,7 +481,6 @@ $('other-windows').addEventListener('scroll', () => { if (bubbleIsOpen()) renewB
 window.addEventListener('keydown', event => {
   if (event.key !== 'Escape') return;
   event.preventDefault();
-  if (settingsOpen) { setSettingsOpen(false); return; }
   closeBubble();
   $('pet').focus({ preventScroll: true });
 });
@@ -603,74 +490,6 @@ motionPreference.addEventListener('change', () => {
   if (reducedMotion()) for (const animation of [petAnimation, bubbleFollowAnimation, reactionAnimation, speechAnimation, numberAnimation]) animation?.cancel();
   render();
 });
-
-$('settings-close')?.addEventListener('click', () => setSettingsOpen(false));
-// The panel is a modal dialog: keep Tab/Shift+Tab inside it until it closes.
-$('settings-panel')?.addEventListener('keydown', event => {
-  if (event.key !== 'Tab' || !settingsOpen) return;
-  const panel = $('settings-panel');
-  const focusable = typeof panel.querySelectorAll === 'function'
-    ? [...panel.querySelectorAll('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])')]
-      .filter(node => !node.hidden)
-    : [];
-  if (!focusable.length) return;
-  const first = focusable[0], last = focusable.at(-1);
-  if (event.shiftKey && document.activeElement === first) {
-    event.preventDefault();
-    last.focus?.({ preventScroll: true });
-  } else if (!event.shiftKey && document.activeElement === last) {
-    event.preventDefault();
-    first.focus?.({ preventScroll: true });
-  }
-});
-$('settings-import-skin')?.addEventListener('click', () => window.petAPI.importSkin());
-$('settings-import-pack')?.addEventListener('click', () => window.petAPI.importSkinPack());
-$('settings-edit-dialogues')?.addEventListener('click', () => window.petAPI.editDialogues());
-$('settings-export-preferences')?.addEventListener('click', () => window.petAPI.exportPreferences());
-$('settings-import-preferences')?.addEventListener('click', () => window.petAPI.importPreferences());
-for (const [id, key, cast] of [
-  ['settings-bubble-x', 'bubbleOffsetX', Number],
-  ['settings-bubble-y', 'bubbleOffsetY', Number],
-  ['settings-idle', 'idleIntervalSec', Number],
-  ['settings-opacity', 'opacity', Number]
-]) {
-  $(id)?.addEventListener('input', event => {
-    const value = cast(event.target.value);
-    window.petAPI.setExperience(key, value);
-    // Apply the visible part immediately; the main process persists the same
-    // value and returns the canonical (clamped) state a moment later.
-    if (key === 'bubbleOffsetX') {
-      document.documentElement?.style?.setProperty('--bubble-offset-x', `${value}px`);
-      $('settings-bubble-x-value').textContent = String(value);
-    }
-    if (key === 'bubbleOffsetY') {
-      document.documentElement?.style?.setProperty('--bubble-offset-y', `${value}px`);
-      $('settings-bubble-y-value').textContent = String(value);
-    }
-    if (key === 'idleIntervalSec') $('settings-idle-value').textContent = String(value);
-    if (key === 'opacity') {
-      document.documentElement?.style?.setProperty('--pet-opacity', String(Math.max(0.35, Math.min(1, value))));
-      $('settings-opacity-value').textContent = `${Math.round(value * 100)}%`;
-    }
-  });
-}
-const setToggle = (id, key) => $(id)?.addEventListener('change', event => {
-  window.petAPI.setExperience?.(key, event.target.checked);
-});
-setToggle('settings-advance', 'advanceOnPetTap');
-setToggle('settings-mirror', 'mirrorOnLeft');
-setToggle('settings-reduced', 'reducedMotion');
-for (const button of document.querySelectorAll?.('[data-bubble-seconds]') || []) {
-  button.addEventListener('click', () => window.petAPI.setExperience?.('bubbleSeconds', Number(button.getAttribute('data-bubble-seconds'))));
-}
-for (const button of document.querySelectorAll?.('[data-reset-key]') || []) {
-  button.addEventListener('click', () => window.petAPI.resetSetting?.(button.getAttribute('data-reset-key')));
-}
-for (const button of document.querySelectorAll?.('[data-reset-group]') || []) {
-  button.addEventListener('click', () => window.petAPI.resetGroup?.(button.getAttribute('data-reset-group')));
-}
-$('settings-reset-all')?.addEventListener('click', () => window.petAPI.resetAll?.());
-window.petAPI.onOpenSettings?.(() => setSettingsOpen(true));
 
 function receiveState(next) {
   const oldSeconds = bubbleSeconds();
@@ -694,6 +513,8 @@ function receiveState(next) {
   if (reducedMotion()) for (const animation of [petAnimation, bubbleFollowAnimation, reactionAnimation, speechAnimation, numberAnimation]) animation?.cancel();
   render();
 }
+window.addEventListener('dragover', event => event.preventDefault());
+window.addEventListener('drop', event => { event.preventDefault(); });
 window.petAPI.onState(receiveState);
 window.petAPI.getState().then(receiveState);
 

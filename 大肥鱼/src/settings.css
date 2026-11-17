@@ -1,0 +1,303 @@
+:root {
+  color-scheme: light;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --font: "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", "Noto Sans CJK SC", "PingFang SC", sans-serif;
+  --color-bg: #f5f7fc;
+  --color-surface: #fffefc;
+  --color-text: #253571;
+  --color-text-secondary: #43547f;
+  --color-accent: #273976;
+  --color-focus: #1e5aa8;
+  --color-danger: #8b2e3c;
+  --color-danger-bg: #fdeeee;
+  --control-h: 36px;
+  --mono: "Cascadia Mono", "Sarasa Mono SC", ui-monospace, monospace;
+  --radius: 16px;
+  --radius-sm: 10px;
+  --bg: var(--color-bg);
+  --bg-elevated: #ffffff;
+  --text: var(--color-text);
+  --muted: var(--color-text-secondary);
+  --line: #d7e0f2;
+  --scrollbar-thumb: #c3cfe6;
+  --accent: var(--color-accent);
+  --accent-text: #fffefc;
+  --chip: #e8eefc;
+  --chip-text: #30447e;
+  --warning: #8a4b12;
+  --warning-bg: #fff4e8;
+  --shadow: 0 10px 30px #24305614;
+  --focus: var(--color-focus);
+  --nav: 220px;
+  --header: 92px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --color-bg: #161b2c;
+    --color-surface: #1e2538;
+    --color-text: #e8eefc;
+    --color-text-secondary: #c9d4ee;
+    --color-accent: #8cb6ff;
+    --color-focus: #8cb6ff;
+    --color-danger: #ffb4b8;
+    --color-danger-bg: #3a2228;
+    --bg: var(--color-bg);
+    --bg-elevated: var(--color-surface);
+    --text: var(--color-text);
+    --muted: var(--color-text-secondary);
+    --line: #343c52;
+    --scrollbar-thumb: #5c6784;
+    --accent: var(--color-accent);
+    --accent-text: #17203a;
+    --chip: #2a3348;
+    --chip-text: #d5def6;
+    --warning: #ffd7a8;
+    --warning-bg: #3a2a18;
+    --shadow: 0 10px 30px #00000055;
+    --focus: var(--color-focus);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --color-bg: #161b2c;
+  --color-surface: #1e2538;
+  --color-text: #e8eefc;
+  --color-text-secondary: #c9d4ee;
+  --color-accent: #8cb6ff;
+  --color-focus: #8cb6ff;
+  --color-danger: #ffb4b8;
+  --color-danger-bg: #3a2228;
+  --bg: var(--color-bg);
+  --bg-elevated: var(--color-surface);
+  --text: var(--color-text);
+  --muted: var(--color-text-secondary);
+  --line: #343c52;
+  --scrollbar-thumb: #5c6784;
+  --accent: var(--color-accent);
+  --accent-text: #17203a;
+  --chip: #2a3348;
+  --chip-text: #d5def6;
+  --warning: #ffd7a8;
+  --warning-bg: #3a2a18;
+  --shadow: 0 10px 30px #00000055;
+  --focus: var(--color-focus);
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; height: 100%; }
+body {
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.45;
+}
+button, input { font: inherit; color: inherit; }
+button { cursor: pointer; }
+.settings-app {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.settings-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-5) var(--space-2);
+  border-bottom: 1px solid var(--line);
+}
+.settings-kicker { margin: 0; font-size: 12px; font-weight: 700; letter-spacing: .08em; color: var(--muted); }
+.settings-header h1 { margin: 0; font-size: 22px; line-height: 1.2; }
+.settings-intro { margin: var(--space-1) 0 0; max-width: 62ch; color: var(--muted); font-size: 13px; }
+.settings-close {
+  min-width: 44px; min-height: 44px; padding: 0 var(--space-4);
+  border: 1px solid var(--line); border-radius: 999px; background: var(--bg-elevated);
+}
+.settings-body { flex: 1; min-height: 0; display: grid; grid-template-columns: var(--nav) 1fr; }
+.settings-nav {
+  display: flex; flex-direction: column; gap: var(--space-1);
+  padding: var(--space-4); border-right: 1px solid var(--line);
+}
+.settings-tab {
+  text-align: left; min-height: 44px; padding: var(--space-2) var(--space-3);
+  border: 1px solid transparent; border-radius: var(--radius-sm); background: transparent; color: var(--text);
+}
+.settings-tab[aria-selected="true"] { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+:root { scrollbar-color: var(--scrollbar-thumb) transparent; }
+.settings-content {
+  overflow: auto;
+  /* R3b: the appearance page now runs ~14px taller (hint moved under the skin
+     grid), so the scroll container's bottom padding drops 24→16 to keep the
+     960x680 first screen from growing a scrollbar. */
+  padding: var(--space-4) var(--space-5) var(--space-4);
+  /* Chromium honours the ::-webkit-scrollbar rules below only while the
+     standard property is `auto`; the inherited themed value would replace the
+     10px track with the platform default. */
+  scrollbar-color: auto;
+}
+.settings-content::-webkit-scrollbar { width: 10px; height: 10px; }
+.settings-content::-webkit-scrollbar-track { background: transparent; }
+.settings-content::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb); border-radius: 5px; border: 2px solid var(--bg);
+}
+.settings-content::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+.settings-panel-page h2 { margin: 0; font-size: 18px; }
+.settings-section-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); margin-bottom: var(--space-3); }
+.settings-card, .settings-drop, .settings-preview {
+  background: var(--bg-elevated);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: var(--space-4);
+}
+.settings-card { display: flex; flex-direction: column; gap: var(--space-3); }
+.settings-hint, .settings-footer p { margin: var(--space-1) 0 0; color: var(--muted); font-size: 13px; }
+/* R3b: this hint belongs to the skin grid, so it sits directly underneath it:
+   6px above the hint, 12px between the hint and the import drop zone. */
+.settings-hint-contrast { margin: 6px 0 12px; }
+.settings-opacity-row { margin-top: var(--space-4); }
+.settings-actions, .settings-row, .settings-size, .settings-chips { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.settings-action, .settings-chip, .settings-size-btn, .settings-reset {
+  min-height: 44px; min-width: 44px; padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line); border-radius: 999px; background: var(--chip); color: var(--chip-text); font-weight: 700;
+}
+.settings-primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+.settings-chip { display: inline-flex; align-items: center; gap: var(--space-2); }
+.settings-chip-thumb { width: 28px; height: 28px; border-radius: 8px; object-fit: cover; background: var(--bg); }
+.settings-chip.is-active, .settings-size-btn.is-active { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+.settings-drop {
+  margin-top: 0;
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-3);
+  border-style: dashed; color: var(--muted); min-height: 56px; padding: 8px 12px;
+}
+.settings-drop strong { color: var(--text); flex: 0 1 auto; }
+.settings-drop > span { font-size: 12px; }
+.settings-drop[data-state="idle"] > span, .settings-drop[data-state="busy"] > span { flex: 1 1 160px; min-width: 0; }
+.settings-drop .settings-action { min-height: 32px; padding: 4px 10px; font-size: 13px; }
+.settings-drop .settings-link { min-height: 32px; padding: 4px; font-size: 12px; }
+/* Only the idle state is a single compact row; drag, error and success states
+   expand (title on its own line) so the longer status text stays readable. */
+.settings-drop[data-state="hover"], .settings-drop[data-state="illegal"],
+.settings-drop[data-state="error"], .settings-drop[data-state="success"] {
+  min-height: 88px; align-content: center;
+}
+.settings-drop[data-state="hover"] > strong, .settings-drop[data-state="illegal"] > strong,
+.settings-drop[data-state="error"] > strong, .settings-drop[data-state="success"] > strong {
+  flex: 1 1 100%;
+}
+.settings-drop.is-drag { border-color: var(--accent); color: var(--text); }
+.settings-preview { margin-top: var(--space-3); gap: var(--space-2); }
+.settings-preview h3 { margin: 0; font-size: 15px; }
+#settings-zip-preview-summary { margin: 0; }
+.settings-preview .settings-actions { justify-content: flex-end; }
+.settings-warning { margin: var(--space-2) 0 0; padding: var(--space-2) var(--space-3); border-radius: var(--radius-sm); background: var(--warning-bg); color: var(--warning); }
+.settings-status:empty { display: none; }
+.settings-notice {
+  position: fixed; right: var(--space-5); bottom: var(--space-5); z-index: 20;
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2);
+  max-width: min(460px, calc(100vw - 2 * var(--space-5)));
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-elevated); color: var(--text);
+  border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow);
+}
+.settings-notice p { margin: 0; flex: 1 1 180px; }
+.settings-notice .settings-action { min-height: 32px; }
+.settings-field { display: grid; grid-template-columns: auto auto 1fr; gap: var(--space-1) var(--space-2); align-items: center; }
+.settings-field .settings-label { grid-column: 1; grid-row: 1; }
+.settings-field .settings-reset { grid-column: 2; grid-row: 1; justify-self: start; }
+.settings-field .settings-value { grid-column: 3; grid-row: 1; justify-self: end; font-variant-numeric: tabular-nums; color: var(--muted); }
+.settings-field input[type="range"] {
+  grid-column: 1 / -1; grid-row: 2; width: 100%; min-height: 32px;
+  margin: 0; display: block; accent-color: var(--accent);
+}
+.settings-label { display: flex; align-items: center; gap: var(--space-2); font-weight: 700; }
+.settings-value { font-variant-numeric: tabular-nums; color: var(--muted); }
+.settings-toggle-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+.settings-switch { display: flex; align-items: center; gap: var(--space-2); font-weight: 700; min-height: 44px; }
+.settings-switch input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.settings-switch-ui {
+  width: 44px; height: 26px; border-radius: 999px; background: var(--line); position: relative; flex: 0 0 auto;
+}
+.settings-switch-ui::after {
+  content: ""; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: var(--bg-elevated);
+}
+.settings-switch input:checked + .settings-switch-ui { background: var(--accent); }
+.settings-switch input:checked + .settings-switch-ui::after { left: 21px; }
+.settings-switch input:focus-visible + .settings-switch-ui { outline: 3px solid var(--focus); outline-offset: 3px; }
+.settings-version { margin: 0; font-size: 20px; font-weight: 800; }
+.settings-code { font-family: var(--mono); font-size: 12px; }
+.settings-footer { margin-top: var(--space-4); }
+.settings-reset-group { min-height: 32px; min-width: 32px; padding: 4px 12px; }
+.settings-reset[data-reset-key] {
+  width: 32px; height: 32px; min-width: 32px; min-height: 32px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center; line-height: 1;
+}
+button:focus-visible, input:focus-visible, .settings-drop:focus-visible {
+  outline: 3px solid var(--focus); outline-offset: 3px;
+}
+.settings-kicker-title { margin: var(--space-4) 0 var(--space-2); font-size: 16px; }
+.settings-skin-grid { display: flex; flex-wrap: wrap; gap: var(--space-3); }
+.settings-size { display: flex; flex-wrap: wrap; gap: 6px; margin-top: var(--space-1); }
+.settings-size-btn {
+  width: 32px; height: 32px; min-width: 32px; min-height: 32px; padding: 0;
+  font-size: 13px; display: inline-flex; align-items: center; justify-content: center;
+}
+.settings-skin-card {
+  width: 112px; min-height: 0; padding: 8px; gap: 4px; position: relative;
+  border-radius: 12px; border: 2px solid var(--line); background: var(--bg-elevated);
+  display: flex; flex-direction: column; align-items: center;
+}
+.settings-skin-card.is-active { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.settings-skin-card.is-active::after {
+  content: "✓"; position: absolute; top: 4px; right: 6px; font-size: 12px; line-height: 1;
+}
+.settings-skin-card img { width: 56px; height: 56px; object-fit: contain; border-radius: 8px; background: var(--chip); }
+.settings-skin-name {
+  word-break: keep-all; overflow-wrap: anywhere; text-align: center;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  line-height: 1.3;
+}
+.settings-skin-origin { font-size: 11px; color: var(--muted); line-height: 1.2; }
+.settings-chip-thumb { width: 72px; height: 72px; object-fit: contain; border-radius: 8px; background: var(--chip); }
+.settings-link { background: transparent; border: 0; color: var(--focus); text-decoration: underline; min-height: 32px; }
+.settings-drop[data-state="illegal"] { background: var(--color-danger-bg); border-color: var(--color-danger); color: var(--color-danger); }
+.settings-drop[data-state="busy"] { opacity: .7; }
+.settings-drop[data-state="error"] { border-color: var(--color-danger); color: var(--color-danger); }
+body.reduced-motion .settings-app, body.reduced-motion .settings-tab, body.reduced-motion .settings-switch-ui::after { transition: none !important; }
+/* Screen-reader only: an announcement must never leak into the visible layout.
+   The regions stay rendered (not display:none) so screen readers keep announcing. */
+.settings-live {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+  overflow: hidden; white-space: nowrap; border: 0;
+  clip: rect(0 0 0 0); clip-path: inset(50%);
+}
+@media (prefers-reduced-motion: reduce) {
+  .settings-app, .settings-tab, .settings-switch-ui::after { transition: none !important; }
+}
+@media (forced-colors: active) {
+  .settings-app, .settings-card, .settings-drop, .settings-preview, .settings-notice {
+    background: Canvas; color: CanvasText; border: 4px solid CanvasText;
+  }
+  .settings-tab, .settings-action, .settings-chip, .settings-size-btn, .settings-reset, .settings-close {
+    background: ButtonFace; color: ButtonText; border: 2px solid ButtonText; forced-color-adjust: auto;
+  }
+  .settings-tab[aria-selected="true"], .settings-chip.is-active, .settings-size-btn.is-active, .settings-primary {
+    background: Highlight; color: HighlightText; border-color: Highlight;
+  }
+  button:focus-visible, input:focus-visible, .settings-drop:focus-visible { outline: 3px solid Highlight; }
+  .settings-chip-thumb { forced-color-adjust: none; }
+}
+@media (prefers-contrast: more) {
+  .settings-app { border: 4px solid CanvasText; }
+  .settings-card, .settings-drop { border-width: 2px; }
+  .settings-hint, .settings-intro, .settings-footer p { color: CanvasText; }
+}

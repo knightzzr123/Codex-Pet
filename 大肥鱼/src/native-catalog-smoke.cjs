@@ -66,7 +66,7 @@ async function checkNativeCatalogHandoff() {
       pending.set(key, { resolve, reject, timer }); child.stdin.write(JSON.stringify({ id: key, method, params }) + '\n');
     });
     return { child, async catalog() {
-      await request('initialize', { clientInfo: { name: 'dafeiyu-native-handoff-smoke', version: '3.3.2' } });
+      await request('initialize', { clientInfo: { name: 'dafeiyu-native-handoff-smoke', version: '3.4.0' } });
       child.stdin.write(JSON.stringify({ method: 'initialized' }) + '\n');
       return request('mcpServerStatus/list', { limit: 100 });
     } };

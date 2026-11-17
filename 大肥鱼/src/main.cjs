@@ -9,7 +9,7 @@ const { pathToFileURL } = require('node:url');
 const { readQuota } = require('./quota.cjs');
 const { scopedBounds, snapBounds, clampBounds, shouldShow } = require('./scope.cjs');
 const { writeJsonAtomic, createCoalescedWriter } = require('./persist.cjs');
-const { DEFAULT_SKIN_ID, EXPERIENCE_KEYS, GROUP_KEYS, ALL_RESET_KEYS, resetPreferenceKeys, settingsKeyDefault } = require('./settings-ia.cjs');
+const { DEFAULT_SKIN_ID, EXPERIENCE_KEYS, GROUP_KEYS, ALL_RESET_KEYS, resetPreferenceKeys, settingsKeyDefault, normalizeColorScheme } = require('./settings-ia.cjs');
 const { createDebouncedShowHide, createDebouncedDiskStatus } = require('./scope-visibility.cjs');
 const { SIZE_SCALES, DEFAULT_SIZE_LEVEL, isSizeLevel, sizeLevelFromPreferences, scaleForLevel } = require('./size.cjs');
 const { getDataDir, getWorkDir } = require('./paths.cjs');
@@ -26,6 +26,10 @@ const { BUBBLE_SECONDS, experienceFromPreferences } = require('./experience.cjs'
 const { createCodexSessionProbe } = require('./codex-session-probe.cjs');
 const { createSessionStateTracker, sessionPresentation } = require('./session-state.cjs');
 const { VIEWPORT, inputRegions } = require('./layout.cjs');
+const { openSettingsWindow, getSettingsWindow } = require('./settings-window.cjs');
+const { noteDisplay, relocateToVisibleDisplay, planScreenEvent, mergeScreenEvent, nearestDisplay, SCREEN_EVENT_DELAY_MS } = require('./display-layout.cjs');
+const { createSkinPackSession } = require('./skin-pack-session.cjs');
+const { version: APP_VERSION, DISPLAY_VERSION } = require('./version-info.cjs');
 const {
   interpolateBounds, interpolateZoom, boundsDiffer, zoomDiffer, settleDurationMs, createSettlePlayer
 } = require('./motion.cjs');
@@ -43,6 +47,10 @@ app.setPath('userData', smokeTest ? path.join(work, 'smoke-data') : dataDir);
 if (!app.requestSingleInstanceLock()) { app.quit(); }
 else {
   let win, interval, scopeMonitor, pluginInterval, sessionTimer, sessionTracker, functionMenu;
+  let screenTimer = null;
+  let refreshScalePending = false;
+  let displayMemory = { displayId: null, scaleFactor: null, crossed: false, scaleChanged: false };
+  let forceDisplayLayout = false;
   let scope = { active: false };
   let closing = false;
   let refreshPromise = null;
@@ -70,7 +78,26 @@ else {
     } catch {}
   }
   const skins = new SkinLibrary(app.getPath('userData'));
-  const skinPacks = new SkinPackLibrary(app.getPath('userData'));
+  const skinPacks = new SkinPackLibrary(app.getPath('userData'), {
+    onDiagnostic(entry) {
+      // README/LICENSE/.txt/.md are skipped, never extracted. Record the
+      // filename and reason in the diagnostic log; the settings UI stays silent.
+      logLifecycle({ event: 'skin-pack-import-skip', file: entry.name, reason: entry.reason, code: entry.code });
+    }
+  });
+  const skinPackSession = createSkinPackSession({
+    library: skinPacks,
+    validateImage: (...args) => validateSkinImage(...args),
+    onDiagnostic(entry) {
+      // D-C4-LOG: the settings window shows only the Chinese copy; keep the
+      // errno, syscall and parser detail in the local lifecycle log.
+      logLifecycle({ event: 'skin-pack-error', code: entry?.code ?? '', syscall: entry?.syscall ?? '', detail: entry?.detail ?? '' });
+    },
+    onImported(pack) {
+      const first = pack?.characters?.[0];
+      if (first) setSkin(packCharacterId(pack.id, first.id));
+    }
+  });
   const dialogueLibrary = new DialogueLibrary(app.getPath('userData'));
   const defaultSkin = { id: 'default', name: '默认 · 鲸鱼娘', url: pathToFileURL(path.join(project, 'assets', 'pet.png')).href };
   const builtInSkins = [defaultSkin, {
@@ -194,10 +221,34 @@ else {
     state.skins = listSkins();
     state.anchorLeft = preferences.placement?.anchorX === 'left';
     state.refreshAvailableAt = lastAttempt ? lastAttempt + 10000 : 0;
+    state.settingsOpen = Boolean(getSettingsWindow());
+    state.version = APP_VERSION;
+    state.displayVersion = DISPLAY_VERSION;
+    state.colorScheme = normalizeColorScheme(preferences.colorScheme);
     try { applyExperienceChrome(); } catch {}
     if (win && !win.isDestroyed() && rendererReady) win.webContents.send('pet:state', state);
+    const settingsWindow = getSettingsWindow();
+    if (settingsWindow) {
+      try { settingsWindow.webContents.send('settings:state', state); } catch {}
+    }
+  }
+  function settingsBackground() {
+    const scheme = normalizeColorScheme(preferences.colorScheme);
+    let dark = scheme === 'dark';
+    if (scheme === 'system') {
+      try { dark = require('electron').nativeTheme.shouldUseDarkColors === true; } catch { dark = false; }
+    }
+    return dark ? '#161b2c' : '#f5f7fc';
   }
   function setExperience(key, value) {
+    if (key === 'colorScheme') {
+      preferences.colorScheme = normalizeColorScheme(value);
+      savePreferences();
+      const settingsWindow = getSettingsWindow();
+      if (settingsWindow) { try { settingsWindow.setBackgroundColor(settingsBackground()); } catch {} }
+      publish();
+      return;
+    }
     const mapped = key === 'idleInterval' ? 'idleIntervalSec' : key;
     const next = experienceFromPreferences({ ...preferences, [mapped]: value });
     if (!Object.hasOwn(next, mapped)) return;
@@ -313,47 +364,54 @@ else {
     publish();
   }
   async function validateSkinImage(bytes, mime) {
-    const url = `data:${mime};base64,${bytes.toString('base64')}`;
-    const valid = await win.webContents.executeJavaScript(`new Promise(resolve => {
-      const image = new Image();
-      const timer = setTimeout(() => resolve(false), 10000);
-      image.onload = () => {
-        clearTimeout(timer);
-        resolve(image.naturalWidth > 0 && image.naturalHeight > 0);
-      };
-      image.onerror = () => { clearTimeout(timer); resolve(false); };
-      image.src = ${JSON.stringify(url)};
-    })`);
-    if (!valid) throw new Error('这张图片无法显示，可能已损坏。请换一张图片。');
+    // Image.onload only waits for the container header, so a PNG with a legal
+    // IHDR but a damaged or truncated IDAT still "loads" and used to be imported
+    // as a blank skin. createImageBitmap decodes the whole bitmap in the
+    // renderer and rejects data that cannot be decoded.
+    const decoding = Promise.resolve()
+      .then(() => win.webContents.executeJavaScript(`(async () => {
+        try {
+          const binary = atob(${JSON.stringify(bytes.toString('base64'))});
+          const data = new Uint8Array(binary.length);
+          for (let i = 0; i < binary.length; i += 1) data[i] = binary.charCodeAt(i);
+          const bitmap = await createImageBitmap(new Blob([data], { type: ${JSON.stringify(mime)} }));
+          const valid = bitmap.width > 0 && bitmap.height > 0;
+          bitmap.close();
+          return valid ? { ok: true } : { ok: false, reason: 'empty' };
+        } catch (error) {
+          return { ok: false, reason: 'decode', name: String(error?.name || ''), detail: String(error?.message || '') };
+        }
+      })()`))
+      .catch(error => ({ ok: false, reason: 'ipc', name: String(error?.name || ''), detail: String(error?.message || '') }));
+    let timer = null;
+    const expired = new Promise(resolve => { timer = setTimeout(() => resolve({ ok: false, reason: 'timeout' }), 10000); });
+    let outcome;
+    try { outcome = await Promise.race([decoding, expired]); }
+    finally { clearTimeout(timer); }
+    if (outcome?.ok) return;
+    const reason = outcome?.reason || 'decode';
+    const code = reason === 'timeout' ? 'SKIN_IMAGE_TIMEOUT'
+      : reason === 'empty' ? 'SKIN_IMAGE_EMPTY'
+        : reason === 'ipc' ? 'SKIN_IMAGE_IPC' : 'SKIN_IMAGE_UNDECODABLE';
+    const technical = reason === 'timeout'
+      ? 'createImageBitmap timed out after 10000 ms'
+      : `${outcome?.name || 'Error'}: ${outcome?.detail || 'image decode failed'}`;
+    // Reuse the lifecycle channel: the settings window only shows the Chinese
+    // sentence, while this entry keeps the renderer's error name and message.
+    logLifecycle({ event: 'skin-pack-error', code, syscall: '', detail: `${technical} (mime=${mime}, bytes=${bytes.length})` });
+    const { userError } = require('./errors.cjs');
+    throw userError('这张图片无法显示，可能已损坏。请换一张图片。');
   }
   async function importSkinFile(file) {
     const skin = await skins.import(file, validateSkinImage);
     setSkin(skin.id);
     return skin;
   }
-  async function chooseSkinPack() {
-    if (importingSkin || deletingSkin || editingDialogues) return;
-    importingSkin = true;
-    cancelDrag();
-    try {
-      const result = await dialog.showOpenDialog(win, {
-        title: '导入皮肤包文件夹', buttonLabel: '导入皮肤包', properties: ['openDirectory'],
-        message: '选择包含 manifest.json、角色图片和缩略图的文件夹'
-      });
-      if (result.canceled || !result.filePaths[0]) return;
-      const pack = await skinPacks.importDirectory(result.filePaths[0], validateSkinImage);
-      if (!pack?.characters?.length) throw new Error('皮肤包没有可用角色。');
-      const first = pack.characters[0];
-      setSkin(packCharacterId(pack.id, first.id));
-      await dialog.showMessageBox(win, {
-        type: 'info', title: '皮肤包已导入', message: `已导入“${pack.name}”`,
-        detail: `包含 ${pack.characters.length} 个角色，可在设置的“外观”分组中切换。`
-      });
-    } catch (error) {
-      await dialog.showMessageBox(win, { type: 'error', title: '无法导入皮肤包',
-        message: '皮肤包导入失败',
-        detail: error.code ? '无法读取或保存皮肤包，请确认文件夹和文件可读、数据目录可写。' : error.message });
-    } finally { importingSkin = false; }
+  function bindSkinPackWindow(settingsWindow) {
+    if (!settingsWindow || settingsWindow.__skinPackBound || settingsWindow.isDestroyed?.()) return;
+    settingsWindow.__skinPackBound = true;
+    const senderId = settingsWindow.webContents.id;
+    settingsWindow.webContents.once('destroyed', () => skinPackSession.releaseSender(senderId));
   }
   async function deleteImportedPack(id) {
     if (importingSkin || deletingSkin || editingDialogues) return false;
@@ -377,19 +435,20 @@ else {
       return false;
     } finally { deletingSkin = false; }
   }
-  async function chooseSkinImage() {
+  async function chooseSkinImage(event) {
     if (importingSkin || deletingSkin || editingDialogues) return;
     importingSkin = true;
     cancelDrag();
+    const parent = dialogOwner(event) || getSettingsWindow() || win;
     try {
-      const result = await dialog.showOpenDialog(win, {
+      const result = await dialog.showOpenDialog(parent, {
         title: '导入角色图片', buttonLabel: '调整这张图片', properties: ['openFile'],
         filters: [{ name: '图片皮肤', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'] }]
       });
       if (!result.canceled && result.filePaths[0]) {
         const source = readImageFile(result.filePaths[0]);
         await validateSkinImage(source.bytes, source.mime);
-        const edited = await openSkinEditor(win, source);
+        const edited = await openSkinEditor(parent, source);
         if (edited) {
           const skin = await skins.importBytes(edited.bytes, edited.name, validateSkinImage);
           setSkin(skin.id);
@@ -431,6 +490,7 @@ else {
     if (typeof settings.skinId === 'string' && settings.skinId && settings.skinId !== state.skin.id) {
       setSkin(settings.skinId);
     }
+    if (settings.colorScheme) preferences.colorScheme = normalizeColorScheme(settings.colorScheme);
     savePreferences({ immediate: true });
   }
   async function exportPreferences() {
@@ -478,14 +538,8 @@ else {
       return false;
     }
   }
-  async function chooseDialogueEditor() {
-    if (editingDialogues || importingSkin || deletingSkin) return;
-    editingDialogues = true; cancelDrag();
-    try {
-      await openDialogueEditor(win, state.dialogues, saveDialogues);
-    } catch (error) {
-      await dialog.showMessageBox(win, { type: 'error', title: '无法编辑台词', message: '台词编辑窗口未能打开，请重试。' });
-    } finally { editingDialogues = false; }
+  function chooseDialogueEditor() {
+    openSettingsPanel('dialogue');
   }
   function saveDialogues(draft) {
     state.dialogues = dialogueLibrary.save(draft);
@@ -494,9 +548,85 @@ else {
   function listSkins() {
     return allSkins().map(({ id, name, kind, thumbnailUrl }) => ({ id, name, kind, thumbnailUrl }));
   }
-  function openSettingsPanel() {
+  function dialogOwner(event) {
+    try {
+      const owner = BrowserWindow.fromWebContents(event?.sender);
+      if (owner && !owner.isDestroyed()) return owner;
+    } catch {}
+    return win && !win.isDestroyed() ? win : undefined;
+  }
+  function zipFailure(error) {
+    if (!error) return '无法导入皮肤包。';
+    if (typeof error.code === 'string' && (error.code.startsWith('ZIP_') || error.code === 'PACK_CHANGED')) return error.message;
+    if (error.code) return '无法读取或保存皮肤包，请确认文件可读、数据目录可写。';
+    return error.message || '无法导入皮肤包。';
+  }
+  function assertSettingsSender(event) {
+    const settingsWindow = getSettingsWindow();
+    const owner = dialogOwner(event);
+    if (!settingsWindow || !owner || owner !== settingsWindow) {
+      const error = new Error('只有设置窗口可以导入皮肤包。');
+      error.code = 'ZIP_SENDER';
+      throw error;
+    }
+  }
+  function skinPackSender(event) {
+    try { assertSettingsSender(event); }
+    catch (error) { return { ok: false, code: error.code || 'ZIP_SENDER', error: error.message }; }
+    return { ok: true, id: event.sender.id };
+  }
+  function isImageSelection(filePath) {
+    return typeof filePath === 'string' && /\.(png|jpe?g|gif|webp|bmp)$/i.test(filePath);
+  }
+  async function importImageFromPath(filePath, parent) {
+    const source = readImageFile(filePath);
+    await validateSkinImage(source.bytes, source.mime);
+    const edited = await openSkinEditor(parent || win, source);
+    if (!edited) return { image: true, canceled: true };
+    const skin = await skins.importBytes(edited.bytes, edited.name, validateSkinImage);
+    setSkin(skin.id);
+    return { image: true, canceled: false };
+  }
+  async function chooseSkinPackSource(event, mode) {
+    const sender = skinPackSender(event);
+    if (!sender.ok) return sender;
+    const directory = mode === 'directory';
+    const result = await dialog.showOpenDialog(dialogOwner(event), directory ? {
+      title: '导入皮肤包文件夹', buttonLabel: '预览', properties: ['openDirectory'],
+      message: '选择包含 manifest.json、角色图片和缩略图的文件夹'
+    } : {
+      title: '导入皮肤包或图片', buttonLabel: '继续', properties: ['openFile'],
+      filters: [{ name: 'ZIP 或图片', extensions: ['zip', 'png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'] }]
+    });
+    if (result.canceled || !result.filePaths[0]) return { ok: true, canceled: true };
+    const filePath = result.filePaths[0];
+    if (!directory && isImageSelection(filePath)) {
+      const imported = await importImageFromPath(filePath, dialogOwner(event));
+      return { ok: true, image: true, canceled: imported.canceled === true };
+    }
+    return skinPackSession.register(filePath, sender.id);
+  }
+  function openSettingsPanel(groupId) {
     cancelDrag();
-    if (win && !win.isDestroyed() && rendererReady) win.webContents.send('pet:open-settings');
+    const existed = Boolean(getSettingsWindow());
+    const settingsWindow = openSettingsWindow({
+      anchor: win,
+      groupId: typeof groupId === 'string' ? groupId : undefined,
+      backgroundColor: settingsBackground(),
+      onClosed: () => {
+        publish();
+        if (win && !win.isDestroyed()) win.focus();
+      }
+    });
+    bindSkinPackWindow(settingsWindow);
+    if (typeof groupId === 'string' && settingsWindow && !settingsWindow.isDestroyed?.()) {
+      const send = () => {
+        if (!settingsWindow.isDestroyed()) settingsWindow.webContents.send('settings:show-group', groupId);
+      };
+      if (existed) send();
+      else settingsWindow.webContents.once('did-finish-load', send);
+    }
+    publish();
   }
   function buildFunctionMenu() {
     const importedSkins = skins.list();
@@ -627,6 +757,7 @@ else {
   function positionWindow() {
     if (!win || win.isDestroyed() || !scope.rect) return false;
     const area = currentArea();
+    const refreshScale = refreshScalePending || displayMemory.crossed || displayMemory.scaleChanged;
     const layout = scopedBounds(area, scaleForLevel(preferences.sizeLevel), preferences.placement);
     if (!layout) {
       cancelSettle();
@@ -634,23 +765,90 @@ else {
       return false;
     }
     if (drag) {
-      if (zoomDiffer(win.webContents.getZoomFactor(), layout.scale)) win.webContents.setZoomFactor(layout.scale);
+      if (zoomDiffer(win.webContents.getZoomFactor(), layout.scale) || refreshScale) win.webContents.setZoomFactor(layout.scale);
       updateInputRegion();
       return true;
     }
-    if (settle && !settle.settled && areaClose(settle.area, area)
+    if (!refreshScale && settle && !settle.settled && areaClose(settle.area, area)
       && !boundsDiffer(settle.targetBounds, layout.bounds) && !zoomDiffer(settle.targetZoom, layout.scale)) {
       updateInputRegion();
       return true;
     }
     if (settle) cancelSettle();
-    if (boundsDiffer(win.getBounds(), layout.bounds)) win.setBounds(layout.bounds);
-    if (zoomDiffer(win.webContents.getZoomFactor(), layout.scale)) win.webContents.setZoomFactor(layout.scale);
+    if (boundsDiffer(win.getBounds(), layout.bounds) || displayMemory.crossed) win.setBounds(layout.bounds);
+    if (zoomDiffer(win.webContents.getZoomFactor(), layout.scale) || refreshScale) win.webContents.setZoomFactor(layout.scale);
     updateInputRegion();
     return true;
   }
   function currentArea() {
-    return screen.screenToDipRect(null, scope.rect);
+    // Keep the nearest-display scale. Passing the pet window would use the
+    // screen the pet is still on when Codex has already crossed to another one.
+    const area = screen.screenToDipRect(null, scope.rect);
+    let displays = [];
+    try { displays = typeof screen.getAllDisplays === 'function' ? screen.getAllDisplays() : []; }
+    catch { displays = []; }
+    const noted = noteDisplay(displayMemory, displays, area);
+    displayMemory = {
+      displayId: noted.displayId,
+      scaleFactor: noted.scaleFactor,
+      crossed: noted.crossed,
+      scaleChanged: noted.scaleChanged
+    };
+    return area;
+  }
+  function applyScreenEvent(payload) {
+    if (!win || win.isDestroyed()) return;
+    const plan = planScreenEvent({
+      kind: payload.kind,
+      changedMetrics: payload.changedMetrics,
+      dragging: Boolean(drag),
+      scopeValid: Boolean(scope.rect)
+    });
+    if (plan.ignore) return;
+    if (plan.cancelDrag) cancelDrag();
+    if (plan.cancelSettle) cancelSettle();
+    if (plan.hide || (payload.kind === 'removed' && !scope.rect)) {
+      win.hide();
+      return;
+    }
+    refreshScalePending = Boolean(payload.changedMetrics?.includes('scaleFactor') || payload.kind === 'removed');
+    try { positionWindow(); }
+    finally { refreshScalePending = false; }
+    try {
+      const settingsWindow = getSettingsWindow();
+      if (settingsWindow) {
+        const display = screen.getDisplayMatching(settingsWindow.getBounds());
+        const area = display.workArea;
+        const bounds = settingsWindow.getBounds();
+        const width = Math.min(bounds.width, area.width);
+        const height = Math.min(bounds.height, area.height);
+        const x = Math.round(Math.min(Math.max(bounds.x, area.x), area.x + area.width - width));
+        const y = Math.round(Math.min(Math.max(bounds.y, area.y), area.y + area.height - height));
+        if (x !== bounds.x || y !== bounds.y || width !== bounds.width || height !== bounds.height) {
+          settingsWindow.setBounds({ x, y, width, height });
+        }
+      }
+    } catch { /* settings window follows the pet's screen events */ }
+    if (!plan.relocate || !win.isVisible()) return;
+    const bounds = win.getBounds();
+    let displays = [];
+    try { displays = screen.getAllDisplays(); } catch { displays = []; }
+    const center = { x: Math.round(bounds.x + bounds.width / 2), y: Math.round(bounds.y + bounds.height / 2) };
+    let nearest = null;
+    try { nearest = screen.getDisplayNearest(center); } catch { nearest = nearestDisplay(bounds, displays); }
+    const relocated = relocateToVisibleDisplay(bounds, displays, nearest);
+    if (relocated) win.setBounds({ x: relocated.x, y: relocated.y, width: relocated.width, height: relocated.height });
+  }
+  let pendingScreen = null;
+  function scheduleScreenEvent(kind, changedMetrics) {
+    pendingScreen = mergeScreenEvent(pendingScreen, { kind, changedMetrics });
+    if (screenTimer) clearTimeout(screenTimer);
+    screenTimer = setTimeout(() => {
+      const payload = pendingScreen;
+      pendingScreen = null;
+      screenTimer = null;
+      applyScreenEvent(payload);
+    }, SCREEN_EVENT_DELAY_MS);
   }
   let scopeVisibility;
   function ensureScopeVisibility() {
@@ -1151,7 +1349,7 @@ else {
       setPlacement: placement => { preferences.placement = placement; savePreferences(); positionWindow(); publish(); },
       dragStart, dragMove, dragEnd });
     const dialogueEditorChecks = await require('./dialogue-editor-smoke.cjs')({ win, work, getMenu: buildFunctionMenu,
-      chooseDialogueEditor, getDialogueEditorWindow, getDialogues: () => state.dialogues,
+      chooseDialogueEditor: () => openDialogueEditor(win, state.dialogues, saveDialogues), getDialogueEditorWindow, getDialogues: () => state.dialogues,
       saveDialogues, dialogueFile: dialogueLibrary.file });
     const bounds = win.getBounds();
     const area = scope.rect ? currentArea() : null;
@@ -1215,17 +1413,101 @@ else {
     updateInputRegion();
     win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     win.webContents.on('will-navigate', event => event.preventDefault());
+    win.webContents.on('before-input-event', (event, input) => {
+      if (input.type === 'keyDown' && input.control && !input.alt && !input.meta && input.key === ',') {
+        event.preventDefault();
+        openSettingsPanel();
+      }
+    });
     publish();
     ipcMain.handle('pet:state', () => state);
     ipcMain.handle('pet:refresh', () => refresh());
     ipcMain.on('pet:menu', openFunctionMenu);
     ipcMain.on('pet:settings-open', openSettingsPanel);
+    ipcMain.handle('settings:get-state', () => state);
+    ipcMain.handle('settings:about', () => ({
+      version: APP_VERSION,
+      displayVersion: DISPLAY_VERSION,
+      electron: process.versions.electron || '',
+      platform: process.platform,
+      dataDir: app.getPath('userData'),
+      workDir: work
+    }));
+    ipcMain.on('settings:close', event => {
+      const owner = dialogOwner(event);
+      if (owner && owner !== win && !owner.isDestroyed()) {
+        owner.__allowClose = true;
+        owner.close();
+      }
+    });
+    ipcMain.handle('skin-pack:choose', (event, mode) => chooseSkinPackSource(event, mode));
+    ipcMain.handle('skin-pack:register-drop', (event, filePath) => {
+      const sender = skinPackSender(event);
+      if (!sender.ok) return sender;
+      return skinPackSession.register(filePath, sender.id);
+    });
+    ipcMain.handle('skin-pack:preview', (event, token) => {
+      const sender = skinPackSender(event);
+      if (!sender.ok) return sender;
+      return skinPackSession.preview(token, sender.id);
+    });
+    ipcMain.handle('skin-pack:commit', (event, payload) => {
+      const sender = skinPackSender(event);
+      if (!sender.ok) return sender;
+      const body = payload && typeof payload === 'object' ? payload : {};
+      return skinPackSession.commit(body.token, sender.id);
+    });
+    ipcMain.handle('skin-pack:cancel', (event, token) => {
+      const sender = skinPackSender(event);
+      if (!sender.ok) return sender;
+      return skinPackSession.cancel(token, sender.id);
+    });
+    ipcMain.handle('settings:copy-diagnostics', event => {
+      try {
+        assertSettingsSender(event);
+        const { clipboard } = require('electron');
+        const text = [
+          `版本 ${APP_VERSION}`,
+          `展示标签 ${DISPLAY_VERSION}`,
+          `Electron ${process.versions.electron || '未随 Electron 启动'}`,
+          `平台 ${process.platform}`,
+          `数据目录 ${app.getPath('userData')}`,
+          `工作目录 ${work}`
+        ].join('\n');
+        clipboard.writeText(text);
+        return { ok: true, text };
+      } catch (error) {
+        return { ok: false, error: error.message };
+      }
+    });
+    ipcMain.handle('settings:dialogue-source', event => {
+      assertSettingsSender(event);
+      return { current: state.dialogues, defaults: defaultDialogues() };
+    });
+    ipcMain.handle('settings:dialogue-save', (event, draft) => {
+      try {
+        assertSettingsSender(event);
+        saveDialogues(draft);
+        return { ok: true };
+      } catch (error) {
+        return { ok: false, error: error.message };
+      }
+    });
+    ipcMain.on('settings:reset-placement', event => { try { assertSettingsSender(event); resetPlacement(); } catch {} });
+    ipcMain.on('settings:delete-current-skin', event => {
+      try {
+        assertSettingsSender(event);
+        const parsed = parsePackCharacterId(state.skin.id);
+        if (parsed) deleteImportedPack(parsed.packId);
+        else deleteImportedSkin(state.skin.id);
+      } catch {}
+    });
     ipcMain.on('pet:size-level', (_event, level) => setSizeLevel(Number(level)));
     ipcMain.on('pet:set-skin', (_event, id) => setSkin(id));
-    ipcMain.on('pet:import-skin', () => { chooseSkinImage(); });
-    ipcMain.on('pet:import-skin-pack', () => { chooseSkinPack(); });
+    ipcMain.on('pet:import-skin', event => { chooseSkinImage(event); });
+    ipcMain.on('pet:import-skin-pack', () => { openSettingsPanel('appearance'); });
     ipcMain.on('pet:delete-skin-pack', (_event, id) => { deleteImportedPack(id); });
-    ipcMain.on('pet:edit-dialogues', () => { chooseDialogueEditor(); });
+    ipcMain.on('pet:edit-dialogues', () => { openSettingsPanel('dialogue'); });
     ipcMain.on('pet:export-preferences', () => { exportPreferences(); });
     ipcMain.on('pet:import-preferences', () => { importPreferences(); });
     ipcMain.on('pet:set-experience', (_event, key, value) => setExperience(key, value));
@@ -1263,9 +1545,18 @@ else {
       }, 250);
     });
     win.on('blur', cancelDrag);
-    screen.on('display-metrics-changed', positionWindow);
-    screen.on('display-removed', positionWindow);
-    screen.on('display-added', positionWindow);
+    try {
+      const { nativeTheme } = require('electron');
+      nativeTheme.on('updated', () => {
+        if (normalizeColorScheme(preferences.colorScheme) !== 'system') return;
+        const settingsWindow = getSettingsWindow();
+        if (settingsWindow) { try { settingsWindow.setBackgroundColor(settingsBackground()); } catch {} }
+        publish();
+      });
+    } catch { /* native theme is unavailable outside Electron */ }
+    screen.on('display-metrics-changed', (_event, _display, changedMetrics) => scheduleScreenEvent('metrics', changedMetrics));
+    screen.on('display-removed', () => scheduleScreenEvent('removed'));
+    screen.on('display-added', () => scheduleScreenEvent('added'));
     await loadRenderer();
     writeIdleBudgetSnapshot('startup');
     if (smokeTest) {
@@ -1303,6 +1594,18 @@ else {
     console.error(error); app.exit(1);
   });
   app.on('second-instance', () => { if (win) updateScope(scope); });
-  app.on('before-quit', () => { closing = true; try { cancelSettle({ apply: true }); } catch {} clearInterval(interval); clearInterval(pluginInterval); if (sessionTimer) clearTimeout(sessionTimer); scopeMonitor?.stop(); try { scopeVisibility?.flush(); } catch {}; flushPersistentState(); });
+  app.on('before-quit', () => {
+    closing = true;
+    try {
+      const settingsWindow = getSettingsWindow();
+      if (settingsWindow && !settingsWindow.isDestroyed()) {
+        settingsWindow.__allowClose = true;
+        settingsWindow.close();
+      }
+    } catch { /* quit must not wait on the settings window */ }
+    try { skinPackSession.releaseAll(); } catch {}
+    try { cancelSettle({ apply: true }); } catch {}
+    clearInterval(interval); clearInterval(pluginInterval); if (sessionTimer) clearTimeout(sessionTimer); scopeMonitor?.stop(); try { scopeVisibility?.flush(); } catch {}; flushPersistentState();
+  });
   app.on('will-quit', flushPersistentState);
 }
