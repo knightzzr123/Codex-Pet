@@ -67,7 +67,8 @@ npm test
 
 ```powershell
 Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
-.\runtime\electron.exe . --smoke-test
+.\runtime\electron.exe . --smoke-test | Out-Host
+"exit=$LASTEXITCODE"
 ```
 
 ## 打包与发布
