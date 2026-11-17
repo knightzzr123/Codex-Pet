@@ -1054,7 +1054,7 @@ test('commit 写数据目录遇到 ENOENT 报通用 IO 文案，而不是「文�
 
 test('main.cjs 的图片解码失败改用 userError，提交阶段能给出具体原因', () => {
   const main = fs.readFileSync(path.join(__dirname, '..', 'src', 'main.cjs'), 'utf8');
-  assert.match(main, /throw userError\('这张图片无法显示，可能已损坏。请换一张图片。'\);/);
+  assert.match(main, /throw userError\('这张图片无法显示，可能已损坏。请换一张图片。', code\);/);
 });
 
 test('会话层导入链路不再直接抛出普通中文 Error（skins.cjs 单图导入除外）', () => {

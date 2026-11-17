@@ -4,7 +4,9 @@ const { randomBytes, randomUUID } = require('node:crypto');
 const { ZIP_LIMITS, writeEntries, ZipError } = require('./zip-reader.cjs');
 const { findManifestDirectory, firstCharacterLink } = require('./skin-packs.cjs');
 const { referencedPathLimitMessage } = require('./manifests.cjs');
-const { isUserFacingError } = require('./errors.cjs');
+const {
+  isUserFacingError, isSystemErrorShape, ACCESS_ERROR_CODES, BUSY_ERROR_CODES, MISSING_ERROR_CODES
+} = require('./errors.cjs');
 
 const TOKEN_TTL_MS = 10 * 60 * 1000;
 const MAX_TOKENS = 4;
@@ -43,22 +45,8 @@ const MESSAGES = Object.freeze({
 // Every other code keeps its specific Chinese reason (PACK_INVALID included).
 const OPAQUE_CODES = new Set(['ZIP_HEADER', 'ZIP_CRC', 'ZIP_FORMAT']);
 
-// Node fs failures: the message is English and embeds the absolute path, so it
-// must never reach the settings window. `errno`/`syscall` are the markers Node
-// sets on every fs error; the code set also catches errors that were re-wrapped
-// without them. EACCES/EPERM mean "cannot read or write it now"; EBUSY usually
-// means a browser or antivirus still holds the file open, so saying only "no
-// permission" would send the user looking for the wrong problem.
-const ACCESS_ERROR_CODES = new Set(['EACCES', 'EPERM']);
-const BUSY_ERROR_CODES = new Set(['EBUSY']);
-const MISSING_ERROR_CODES = new Set(['ENOENT', 'ENOTDIR']);
-const SYSTEM_ERROR_CODES = new Set([
-  ...ACCESS_ERROR_CODES,
-  ...BUSY_ERROR_CODES,
-  ...MISSING_ERROR_CODES,
-  'EIO', 'ENOSPC', 'EROFS', 'EMFILE', 'ENFILE', 'ENAMETOOLONG',
-  'EEXIST', 'EISDIR', 'ELOOP', 'ENOTEMPTY', 'EXDEV', 'EINVAL', 'UNKNOWN'
-]);
+// System-error code sets and the shape check live in errors.cjs so the image
+// import and the skin-pack import cannot drift apart.
 const BUSY_IO_ERROR = '文件被占用或没有权限读取，请稍后重试。';
 // The data dir is technical wording: what the user can act on is the file and
 // the disk, so the generic sentence names those instead.
@@ -71,12 +59,10 @@ function carriesUserMessage(error) {
 }
 
 function isSystemError(error) {
-  if (!error || typeof error !== 'object') return false;
   // Our own errors win: they were written for the user even when a message
   // happens to mention a path or an errno-like word.
   if (carriesUserMessage(error)) return false;
-  if (typeof error.syscall === 'string' || error.errno !== undefined) return true;
-  return typeof error.code === 'string' && SYSTEM_ERROR_CODES.has(error.code);
+  return isSystemErrorShape(error);
 }
 
 function systemFailure(error, context = {}) {

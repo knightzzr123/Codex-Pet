@@ -29,6 +29,7 @@ const { VIEWPORT, inputRegions } = require('./layout.cjs');
 const { openSettingsWindow, getSettingsWindow } = require('./settings-window.cjs');
 const { noteDisplay, relocateToVisibleDisplay, planScreenEvent, mergeScreenEvent, nearestDisplay, SCREEN_EVENT_DELAY_MS } = require('./display-layout.cjs');
 const { createSkinPackSession } = require('./skin-pack-session.cjs');
+const { userError, imageImportFailure } = require('./errors.cjs');
 const { version: APP_VERSION, DISPLAY_VERSION } = require('./version-info.cjs');
 const {
   interpolateBounds, interpolateZoom, boundsDiffer, zoomDiffer, settleDurationMs, createSettlePlayer
@@ -399,8 +400,7 @@ else {
     // Reuse the lifecycle channel: the settings window only shows the Chinese
     // sentence, while this entry keeps the renderer's error name and message.
     logLifecycle({ event: 'skin-pack-error', code, syscall: '', detail: `${technical} (mime=${mime}, bytes=${bytes.length})` });
-    const { userError } = require('./errors.cjs');
-    throw userError('这张图片无法显示，可能已损坏。请换一张图片。');
+    throw userError('这张图片无法显示，可能已损坏。请换一张图片。', code);
   }
   async function importSkinFile(file) {
     const skin = await skins.import(file, validateSkinImage);
@@ -455,8 +455,12 @@ else {
         }
       }
     } catch (error) {
+      // Both image paths share one classifier: a UserFacingError keeps its
+      // sentence, an fs error is logged and replaced by Chinese copy, and an
+      // unexpected error never shows its English message.
+      const { error: detail } = imageImportFailure(error, logLifecycle);
       await dialog.showMessageBox(win, { type: 'error', title: '无法导入皮肤',
-        message: '皮肤导入失败', detail: error.code ? '无法读取或保存图片，请确认文件存在且目录可写。' : error.message });
+        message: '皮肤导入失败', detail });
     } finally { importingSkin = false; }
   }
   async function deleteImportedSkin(id) {
@@ -601,8 +605,14 @@ else {
     if (result.canceled || !result.filePaths[0]) return { ok: true, canceled: true };
     const filePath = result.filePaths[0];
     if (!directory && isImageSelection(filePath)) {
-      const imported = await importImageFromPath(filePath, dialogOwner(event));
-      return { ok: true, image: true, canceled: imported.canceled === true };
+      // Return the structured failure instead of throwing: an IPC rejection
+      // loses its code and reaches the renderer as an English message string.
+      try {
+        const imported = await importImageFromPath(filePath, dialogOwner(event));
+        return { ok: true, image: true, canceled: imported.canceled === true };
+      } catch (error) {
+        return imageImportFailure(error, logLifecycle);
+      }
     }
     return skinPackSession.register(filePath, sender.id);
   }

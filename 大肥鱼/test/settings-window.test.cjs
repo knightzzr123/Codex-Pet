@@ -598,6 +598,96 @@ test('预览失败时焦点回到拖拽区并只播报一次错误', async () =>
   assert.equal(f.doc.activeElement, f.get('settings-zip-drop'));
 });
 
+test('「选择文件…」IPC 本身失败时给通用提示并恢复可再次选择（D-16CB-CHOOSE-UNHANDLED）', async () => {
+  const f = fixture();
+  const assertive = liveRecorder(f, 'settings-live-assertive');
+  const failed = '无法导入这张图片，请重试。';
+  f.api.chooseSkinPack = async () => {
+    // Electron rejects ipcRenderer.invoke with an English wrapper; the path
+    // comes from the native dialog / fs error. Neither may reach the UI, but
+    // this catch is only the IPC fallback now: real image failures are results.
+    throw new Error("Error invoking remote method 'skin-pack:choose': Error: "
+      + "ENOENT: no such file or directory, open '/home/qa/private/bad.png'");
+  };
+  f.get('settings-import-zip').emit('click', { stopPropagation() {} });
+  await new Promise(resolve => setTimeout(resolve, 0));
+
+  const drop = f.get('settings-zip-drop');
+  assert.equal(drop.dataset.state, 'error');
+  assert.equal(f.get('settings-drop-title').textContent, '导入失败');
+  assert.equal(f.get('settings-drop-detail').textContent, failed);
+  assert.deepEqual(assertive.writes, [failed]);
+  const visible = [f.get('settings-drop-title').textContent, f.get('settings-drop-detail').textContent,
+    assertive.value()].join('\n');
+  assert.doesNotMatch(visible, /ENOENT|Error|invoking|\/home\/qa|bad\.png|已损坏/);
+  for (const id of ['settings-import-zip', 'settings-import-pack', 'settings-import-skin']) {
+    assert.equal(f.get(id).disabled, false, id);
+  }
+  assert.equal(f.doc.activeElement, drop);
+
+  // The same buttons can start another selection: the state must not stay busy.
+  f.api.chooseSkinPack = async () => ({ ok: true, image: true, canceled: true });
+  f.get('settings-import-zip').emit('click', { stopPropagation() {} });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(drop.dataset.state, 'idle');
+  assert.equal(f.get('settings-drop-title').textContent, '将 .zip 或皮肤包文件夹拖到此处');
+  assert.equal(f.get('settings-live').textContent, '已取消图片导入');
+  // P3-c: cancelling an image import returns focus to the drop zone.
+  assert.equal(f.doc.activeElement, drop);
+});
+
+test('「选择文件…」图片过大时显示主进程的原文，而不是「已损坏」（P2-1）', async () => {
+  const f = fixture();
+  const assertive = liveRecorder(f, 'settings-live-assertive');
+  const message = '图片不能超过 20 MB。';
+  f.api.chooseSkinPack = async () => ({ ok: false, code: 'IMAGE_INVALID', error: message });
+  f.get('settings-import-zip').emit('click', { stopPropagation() {} });
+  await new Promise(resolve => setTimeout(resolve, 0));
+
+  const drop = f.get('settings-zip-drop');
+  assert.equal(drop.dataset.state, 'error');
+  assert.equal(f.get('settings-drop-title').textContent, '导入失败');
+  assert.equal(f.get('settings-drop-detail').textContent, message);
+  assert.deepEqual(assertive.writes, [message]);
+  const visible = [f.get('settings-drop-title').textContent, f.get('settings-drop-detail').textContent,
+    assertive.value()].join('\n');
+  assert.doesNotMatch(visible, /已损坏|损坏/);
+  for (const id of ['settings-import-zip', 'settings-import-pack', 'settings-import-skin']) {
+    assert.equal(f.get(id).disabled, false, id);
+  }
+  assert.equal(f.doc.activeElement, drop);
+});
+
+test('「选择文件…」坏图显示解码失败原句，结构化结果被当作结果处理而不是 reject（P2-1）', async () => {
+  const f = fixture();
+  const assertive = liveRecorder(f, 'settings-live-assertive');
+  const message = '这张图片无法显示，可能已损坏。请换一张图片。';
+  f.api.chooseSkinPack = async () => ({ ok: false, code: 'SKIN_IMAGE_UNDECODABLE', error: message });
+  f.get('settings-import-zip').emit('click', { stopPropagation() {} });
+  await new Promise(resolve => setTimeout(resolve, 0));
+
+  const drop = f.get('settings-zip-drop');
+  assert.equal(drop.dataset.state, 'error');
+  assert.equal(f.get('settings-drop-detail').textContent, message);
+  assert.deepEqual(assertive.writes, [message]);
+  assert.equal(f.doc.activeElement, drop);
+});
+
+test('「选择文件…」图片导入成功后回到 idle 并把焦点还给拖放区（P3-c）', async () => {
+  const f = fixture();
+  f.api.chooseSkinPack = async () => ({ ok: true, image: true, canceled: false });
+  f.get('settings-import-zip').emit('click', { stopPropagation() {} });
+  await new Promise(resolve => setTimeout(resolve, 0));
+
+  const drop = f.get('settings-zip-drop');
+  assert.equal(drop.dataset.state, 'idle');
+  assert.equal(f.get('settings-live').textContent, '图片已导入');
+  assert.equal(f.doc.activeElement, drop);
+  for (const id of ['settings-import-zip', 'settings-import-pack', 'settings-import-skin']) {
+    assert.equal(f.get(id).disabled, false, id);
+  }
+});
+
 test('预览返回错误码时焦点回到拖拽区，损坏格式只显示统一中文', async () => {
   const f = fixture();
   const assertive = liveRecorder(f, 'settings-live-assertive');

@@ -27,4 +27,25 @@
 
 `tools/package.py` 和 `tools/package-source.py` 只各写自己的 `<产物名>.sha256`（LF），不覆盖汇总文件。发版前由 `tools/write-sha256sums.py --version <内部版本> --complete <完整包> --source <源码包>` 一次生成含两个资产的 `SHA256SUMS`（LF），文件名使用上面的正式资产名。汇总脚本会读取两个 ZIP 内的 `PACKAGE-TYPE.json`，`--complete`/`--source` 写反时直接报错退出。
 
-两个 ZIP 必须以上面的正式资产名放在 `SHA256SUMS` 同一目录，且解压后的 `大肥鱼\` 也在该目录下一层，`release-check --package` 才能按清单核对产物；推荐顺序是「解压 → 首次自检 → 汇总 → 再次自检」。
+两个 ZIP 必须以上面的正式资产名放在 `SHA256SUMS` 同一目录，且解压后的 `大肥鱼\` 也在该目录下一层，`release-check --package` 才能按清单核对产物；推荐顺序是「解压 → 首次自检 → 汇总 → 再次自检」，两次自检都通过后再做最后一步真实解码回归（见下）。
+
+## 发版前的真实解码回归
+
+发版检查清单的最后一步：用打包附带的 Electron 跑一次 `test/electron/validate-skin-image.electron.cjs`，坏 PNG 必须被拒绝。该脚本需要 Electron 二进制，不在 `npm test` 里；它用生产版 `validateSkinImage` 对 `test/fixtures/skin-image/` 里的真实坏图跑 `createImageBitmap`，不是 mock。`runtime\electron.exe` 来自包里经 manifest 校验的 `runtime.7z`，而 `prepare-runtime.ps1` 解包成功后会删掉这个压缩包，所以在解压包的副本里跑，不要动发布目录里还要再自检的那一份。以下命令在 `大肥鱼\` 源码目录执行，`..\release\` 为发布目录。第一行先删掉上一次的临时副本：目标目录已存在时 `Copy-Item -Recurse` 不会覆盖，而是复制成嵌套子目录，后面的 `Set-Location` 就会留在旧副本里、测到上一次的包。如果上一次的 electron.exe 还占用着文件，`Remove-Item` 会静默失败，所以下一行用 `Test-Path` 确认副本已删干净，没删掉就中止。
+
+```powershell
+$ErrorActionPreference = 'Stop'
+Remove-Item "$env:TEMP\dafeiyu-electron-check" -Recurse -Force -ErrorAction SilentlyContinue
+if (Test-Path "$env:TEMP\dafeiyu-electron-check") { throw '旧副本未删干净，请先关闭 electron.exe' }
+Copy-Item "..\release\大肥鱼" "$env:TEMP\dafeiyu-electron-check" -Recurse -Force
+Set-Location "$env:TEMP\dafeiyu-electron-check"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\prepare-runtime.ps1 -Verify
+if ($LASTEXITCODE -ne 0) { throw '运行时准备失败' }
+Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
+.\runtime\electron.exe test\electron\validate-skin-image.electron.cjs | Out-Host
+"exit=$LASTEXITCODE"
+```
+
+`electron.exe` 是 GUI 程序，直接调用时 PowerShell 不会等它退出，`$LASTEXITCODE` 可能还是上一步 `prepare-runtime.ps1` 的值；`| Out-Host` 会让管道等它退出后再读退出码。
+
+通过标准：`exit=` 那一行显示 0，且它之前 `electron.exe` 的标准输出（stdout）最后一行是 `Electron <版本> / Chromium <版本>: 5 checks passed.`（Electron 版本应与 `runtime-manifest.json` 的 `electron` 一致），即 5 项全过：正常 PNG 能解码；`bad-idat`、`truncated-idat`、`truncated-file` 三张坏图都被拒绝并各写一条 `skin-pack-error`；渲染进程无响应时按 10 秒超时失败。Chromium 的日志走 stderr，可能夹在 stdout 之间或之后出现，判断「最后一行」时只看 stdout。出现 `ELECTRON SKIN DECODE TEST FAILED` 或退出码非 0 就不能发版。整轮约需 10 秒以上。

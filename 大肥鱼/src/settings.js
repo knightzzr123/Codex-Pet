@@ -392,7 +392,11 @@ const IMPORT_FALLBACKS = Object.freeze({
   ZIP_MANIFEST_MISSING: '没有找到 manifest.json，请确认皮肤包里有一份 manifest.json。',
   ZIP_MANIFEST_MULTIPLE: '皮肤包里有多个 manifest.json，请只保留一份。',
   ZIP_ACCESS: '没有权限读取皮肤包里的文件。',
-  ZIP_UNSUPPORTED: '只能导入普通 ZIP 文件。'
+  ZIP_UNSUPPORTED: '只能导入普通 ZIP 文件。',
+  // Only an IPC failure (window destroyed, handler missing) reaches the
+  // catch below; every image import failure the main process knows about is a
+  // structured result and keeps its own sentence.
+  IMAGE_FAILED: '无法导入这张图片，请重试。'
 });
 
 // The main process already maps these codes, but the renderer keeps the last
@@ -458,16 +462,32 @@ async function previewToken(token) {
   }
 }
 
+// P2-1: the single-image branch returns { ok:false, code, error } instead of
+// rejecting, so the sentence is chosen by the main process (too large, wrong
+// format, missing file, ...) and never depends on parsing an English IPC
+// rejection. The catch below is only for an IPC failure itself.
+const IMAGE_IMPORT_FAILED = '无法导入这张图片，请重试。';
+
 async function choosePack(mode) {
   setDropState('busy');
-  const chosen = await window.settingsAPI?.chooseSkinPack?.(mode);
-  if (chosen?.ok && chosen.token) await previewToken(chosen.token);
-  else if (chosen?.ok && chosen.image) {
-    setDropState('idle');
-    live(chosen.canceled ? '已取消图片导入' : '图片已导入');
-  } else if (chosen?.ok && chosen.canceled) setDropState('idle');
-  else if (chosen && chosen.ok === false) rejectPack(chosen);
-  else setDropState('idle');
+  try {
+    const chosen = await window.settingsAPI?.chooseSkinPack?.(mode);
+    if (chosen?.ok && chosen.token) await previewToken(chosen.token);
+    else if (chosen?.ok && chosen.image) {
+      setDropState('idle');
+      live(chosen.canceled ? '已取消图片导入' : '图片已导入');
+      // The buttons were disabled while busy; a successful/cancelled image
+      // import returns to idle without any visible result, so focus goes back
+      // to the drop zone instead of falling to <body>.
+      focusDrop();
+    } else if (chosen?.ok && chosen.canceled) { setDropState('idle'); focusDrop(); }
+    else if (chosen && chosen.ok === false) rejectPack(chosen);
+    else { setDropState('idle'); focusDrop(); }
+  } catch {
+    // rejectPack() re-enables the buttons, hides the busy text, announces the
+    // failure and moves focus back to the drop zone.
+    rejectPack({ code: 'IMAGE_FAILED', error: IMAGE_IMPORT_FAILED });
+  }
 }
 
 let importingZip = false;
