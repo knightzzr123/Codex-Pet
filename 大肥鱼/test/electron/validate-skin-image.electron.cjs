@@ -47,9 +47,12 @@ function srcRequire(id) {
 }
 
 function makeValidator(win, logs) {
-  const factory = new Function('win', 'logLifecycle', 'require',
+  // `userError` is injected explicitly: main.cjs imports it at module scope,
+  // which a function body extracted from that module cannot see. Passing it
+  // here keeps this test running the exact shipped validateSkinImage source.
+  const factory = new Function('win', 'logLifecycle', 'require', 'userError',
     `${extractValidateSkinImage(fs.readFileSync(MAIN, 'utf8'))}\nreturn validateSkinImage;`);
-  return factory(win, entry => logs.push(entry), srcRequire);
+  return factory(win, entry => logs.push(entry), srcRequire, srcRequire('./errors.cjs').userError);
 }
 
 // Reproduces the old check (Image.onload) so the test can show why it passed.
@@ -78,7 +81,9 @@ async function rejectsBroken(win, fixtureName, expectedCode) {
   await assert.rejects(() => validate(bytes, 'image/png'), error => {
     assert.equal(error.name, 'UserFacingError');
     assert.equal(error.userFacing, true);
-    assert.equal(error.code, 'PACK_INVALID');
+    // The thrown error carries the decode code so both import paths can report
+    // it; the UI still shows the same Chinese sentence.
+    assert.equal(error.code, expectedCode);
     assert.equal(error.message, PNG_BROKEN);
     return true;
   });
@@ -114,7 +119,8 @@ async function main() {
   const hangingWin = { webContents: { executeJavaScript: () => new Promise(() => {}) } };
   const timeoutLogs = [];
   const started = Date.now();
-  await assert.rejects(() => makeValidator(hangingWin, timeoutLogs)(goodBytes, 'image/png'), { message: PNG_BROKEN });
+  await assert.rejects(() => makeValidator(hangingWin, timeoutLogs)(goodBytes, 'image/png'),
+    { name: 'UserFacingError', code: 'SKIN_IMAGE_TIMEOUT', message: PNG_BROKEN });
   assert.ok(Date.now() - started >= 9900, 'decode timeout must wait about 10 seconds');
   assert.equal(timeoutLogs.length, 1);
   assert.equal(timeoutLogs[0].event, 'skin-pack-error');

@@ -1,6 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { createHash, randomUUID } = require('node:crypto');
+const { userError } = require('./errors.cjs');
 
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 const FORMATS = Object.freeze({ png: 'image/png', jpg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp' });
@@ -26,12 +27,12 @@ function atomicWrite(file, contents) {
 
 function readImageFile(file) {
   const stat = fs.statSync(file);
-  if (!stat.isFile()) throw new Error('请选择图片文件。');
-  if (stat.size > MAX_IMAGE_BYTES) throw new Error('图片不能超过 20 MB。');
+  if (!stat.isFile()) throw userError('请选择图片文件。', 'IMAGE_INVALID');
+  if (stat.size > MAX_IMAGE_BYTES) throw userError('图片不能超过 20 MB。', 'IMAGE_INVALID');
   const bytes = fs.readFileSync(file);
-  if (bytes.length > MAX_IMAGE_BYTES) throw new Error('图片不能超过 20 MB。');
+  if (bytes.length > MAX_IMAGE_BYTES) throw userError('图片不能超过 20 MB。', 'IMAGE_INVALID');
   const extension = imageFormat(bytes);
-  if (!extension) throw new Error('请使用 PNG、JPG、WebP、GIF 或 BMP 图片。');
+  if (!extension) throw userError('请使用 PNG、JPG、WebP、GIF 或 BMP 图片。', 'IMAGE_INVALID');
   return { bytes, extension, mime: FORMATS[extension], name: path.parse(file).name.slice(0, 80) || '自定义皮肤' };
 }
 
@@ -93,9 +94,9 @@ class SkinLibrary {
   }
 
   async importBytes(bytes, name, validateImage) {
-    if (bytes.length > MAX_IMAGE_BYTES) throw new Error('图片不能超过 20 MB。');
+    if (bytes.length > MAX_IMAGE_BYTES) throw userError('图片不能超过 20 MB。', 'IMAGE_INVALID');
     const extension = imageFormat(bytes);
-    if (!extension) throw new Error('请使用 PNG、JPG、WebP、GIF 或 BMP 图片。');
+    if (!extension) throw userError('请使用 PNG、JPG、WebP、GIF 或 BMP 图片。', 'IMAGE_INVALID');
     // Decode before saving so a damaged or misleading file cannot replace the current skin.
     await validateImage(bytes, FORMATS[extension]);
     const id = createHash('sha256').update(bytes).digest('hex');

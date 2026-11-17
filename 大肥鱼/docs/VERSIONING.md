@@ -31,10 +31,11 @@
 
 ## 发版前的真实解码回归
 
-发版检查清单的最后一步：用打包附带的 Electron 跑一次 `test/electron/validate-skin-image.electron.cjs`，坏 PNG 必须被拒绝。该脚本需要 Electron 二进制，不在 `npm test` 里；它用生产版 `validateSkinImage` 对 `test/fixtures/skin-image/` 里的真实坏图跑 `createImageBitmap`，不是 mock。`runtime\electron.exe` 来自包里经 manifest 校验的 `runtime.7z`，而 `prepare-runtime.ps1` 解包成功后会删掉这个压缩包，所以在解压包的副本里跑，不要动发布目录里还要再自检的那一份。以下命令在 `大肥鱼\` 源码目录执行，`..\release\` 为发布目录。第一行先删掉上一次的临时副本：目标目录已存在时 `Copy-Item -Recurse` 不会覆盖，而是复制成嵌套子目录，后面的 `Set-Location` 就会留在旧副本里、测到上一次的包。
+发版检查清单的最后一步：用打包附带的 Electron 跑一次 `test/electron/validate-skin-image.electron.cjs`，坏 PNG 必须被拒绝。该脚本需要 Electron 二进制，不在 `npm test` 里；它用生产版 `validateSkinImage` 对 `test/fixtures/skin-image/` 里的真实坏图跑 `createImageBitmap`，不是 mock。`runtime\electron.exe` 来自包里经 manifest 校验的 `runtime.7z`，而 `prepare-runtime.ps1` 解包成功后会删掉这个压缩包，所以在解压包的副本里跑，不要动发布目录里还要再自检的那一份。以下命令在 `大肥鱼\` 源码目录执行，`..\release\` 为发布目录。第一行先删掉上一次的临时副本：目标目录已存在时 `Copy-Item -Recurse` 不会覆盖，而是复制成嵌套子目录，后面的 `Set-Location` 就会留在旧副本里、测到上一次的包。如果上一次的 electron.exe 还占用着文件，`Remove-Item` 会静默失败，所以下一行用 `Test-Path` 确认副本已删干净，没删掉就中止。
 
 ```powershell
 Remove-Item "$env:TEMP\dafeiyu-electron-check" -Recurse -Force -ErrorAction SilentlyContinue
+if (Test-Path "$env:TEMP\dafeiyu-electron-check") { throw '旧副本未删干净，请先关闭 electron.exe' }
 Copy-Item "..\release\大肥鱼" "$env:TEMP\dafeiyu-electron-check" -Recurse -Force
 Set-Location "$env:TEMP\dafeiyu-electron-check"
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\prepare-runtime.ps1 -Verify

@@ -1,6 +1,7 @@
 const { BrowserWindow, ipcMain, screen, nativeImage } = require('electron');
 const path = require('node:path');
 const { MAX_IMAGE_BYTES, imageFormat } = require('./skins.cjs');
+const { userError } = require('./errors.cjs');
 
 let active = null;
 let registered = false;
@@ -24,13 +25,13 @@ function registerHandlers() {
       else if (payload?.mode === 'crop') {
         const prefix = 'data:image/png;base64,';
         if (typeof payload.dataUrl !== 'string' || !payload.dataUrl.startsWith(prefix)
-          || payload.dataUrl.length > Math.ceil(MAX_IMAGE_BYTES * 4 / 3) + prefix.length) throw new Error('裁剪图片过大，请缩小后再试。');
+          || payload.dataUrl.length > Math.ceil(MAX_IMAGE_BYTES * 4 / 3) + prefix.length) throw userError('裁剪图片过大，请缩小后再试。', 'IMAGE_INVALID');
         const bytes = Buffer.from(payload.dataUrl.slice(prefix.length), 'base64');
-        if (bytes.length > MAX_IMAGE_BYTES || imageFormat(bytes) !== 'png' || bytes.length < 24) throw new Error('无法保存裁剪图片，请重试。');
+        if (bytes.length > MAX_IMAGE_BYTES || imageFormat(bytes) !== 'png' || bytes.length < 24) throw userError('无法保存裁剪图片，请重试。', 'IMAGE_SAVE');
         const width = bytes.readUInt32BE(16), height = bytes.readUInt32BE(20);
-        if (!width || !height || width > 2048 || height > 2048 || nativeImage.createFromBuffer(bytes).isEmpty()) throw new Error('无法保存裁剪图片，请重试。');
+        if (!width || !height || width > 2048 || height > 2048 || nativeImage.createFromBuffer(bytes).isEmpty()) throw userError('无法保存裁剪图片，请重试。', 'IMAGE_SAVE');
         session.result = { bytes, name: `${session.source.name} · 裁剪` };
-      } else if (payload?.mode !== 'cancel') throw new Error('请选择导入方式。');
+      } else if (payload?.mode !== 'cancel') throw userError('请选择导入方式。', 'IMAGE_INVALID');
       session.finishing = true;
       setImmediate(() => { if (!session.window.isDestroyed()) session.window.close(); });
       return { ok: true };
